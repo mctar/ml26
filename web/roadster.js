@@ -15,6 +15,10 @@ const TERRAIN_DX = 32;          // feet per index
 const CAR_LENGTH = 15;          // feet, a Roadster
 const FT = 1;
 
+/** Burness's lander, from the DESIGN table: moves (M) and lines (L) in
+ * raster units about the ship's centre, with the intensity level (I). */
+const LANDER_1973 = [['I', 4], ['M', -6, 0], ['L', -14, 8], ['L', -14, 20], ['L', -6, 29], ['L', 6, 29], ['L', 14, 20], ['L', 14, 8], ['L', 6, 0], ['L', -6, 0], ['M', -17, 0], ['L', -17, -16], ['L', 17, -16], ['L', 17, 0], ['L', -17, 0], ['I', 3], ['L', -32, -24], ['M', 17, 0], ['L', 32, -24], ['I', 1], ['M', -17, -14], ['L', -28, -18], ['M', 17, -14], ['L', 28, -18], ['I', 4], ['M', 36, -24], ['L', 28, -24], ['M', -28, -24], ['L', -36, -24], ['M', -3, -16], ['L', -7, -21], ['L', 7, -21], ['L', 3, -16]];
+
 export const FEATURE = { NONE: 0, OLD_SHIP: 1, FLAG: 2, WRECK_LEFT: 3, WRECK_RIGHT: 4, ROCK: 5, DINER_SIDE: 6, DINER: 7 };
 
 // A small, fast hash noise for the hills.
@@ -215,21 +219,77 @@ export class Roadster {
 
   /** Read the terrain and the features out of the original's memory. */
   load(symbols, peek) {
+    this.symbols = symbols;
+    this.peek = peek;
     const h = new Int16Array(TERRAIN_N);
     for (let i = 0; i < TERRAIN_N; i++) h[i] = (peek(symbols.TERAIN + 2 * i) << 16) >> 16;
     this.terrain = h;
+    this.features = this.readFeatures();
+    this.buildTerrain();
+    this.buildFeatures();
+    this.buildLeftovers();
+  }
+
+  /** The feature table as it stands: a nibble per terrain index. */
+  readFeatures() {
     const f = new Uint8Array(TERRAIN_N);
     for (let i = 0; i < TERRAIN_N; i++) {
       // FEATUR is a byte table: byte i/2 holds index i (low nibble, even i)
       // and i+1 (high nibble). peek reads words at even addresses.
-      const addr = symbols.FEATUR + (i >> 1);
-      const word = peek(addr & ~1);
+      const addr = this.symbols.FEATUR + (i >> 1);
+      const word = this.peek(addr & ~1);
       const byte = addr & 1 ? word >> 8 : word & 0xff;
       f[i] = i & 1 ? (byte >> 4) & 15 : byte & 15;
     }
-    this.features = f;
-    this.buildTerrain();
-    this.buildFeatures();
+    return f;
+  }
+
+  /** What earlier games left on the Moon, as the program records it in
+   * the feature table: cars parked after good landings, wrecks tilted
+   * left or right, flags. Rebuilt when a new game begins. */
+  buildLeftovers() {
+    if (this.leftovers) this.scene.remove(this.leftovers);
+    this.leftovers = new T.Group();
+    this.features = this.readFeatures();
+    for (let i = 0; i < TERRAIN_N; i++) {
+      const f = this.features[i];
+      if (f !== FEATURE.OLD_SHIP && f !== FEATURE.FLAG && f !== FEATURE.WRECK_LEFT && f !== FEATURE.WRECK_RIGHT) continue;
+      const x = TERRAIN_X0 + i * TERRAIN_DX + TERRAIN_DX / 2;
+      const y = this.height(x);
+      let o;
+      if (f === FEATURE.FLAG) {
+        o = this.buildFlag();
+      } else {
+        o = this.buildCar(f === FEATURE.OLD_SHIP ? 'parked' : 'wreck');
+        if (f === FEATURE.WRECK_LEFT) o.rotation.z = 0.5;
+        if (f === FEATURE.WRECK_RIGHT) o.rotation.z = -0.5;
+      }
+      o.position.set(x, y, 0);
+      this.leftovers.add(o);
+    }
+    this.scene.add(this.leftovers);
+  }
+
+  /** The 1973 lander, in light: Burness's DESIGN table as a hologram in
+   * the diner's lot, the first customer. */
+  buildLander() {
+    const pts = [];
+    const S = 0.5; // feet per raster unit
+    let cur = null;
+    for (const op of LANDER_1973) {
+      if (op[0] === 'M') cur = [op[1] * S, op[2] * S];
+      if (op[0] === 'L') {
+        if (cur) pts.push(cur[0], cur[1] + 12, 0, op[1] * S, op[2] * S + 12, 0);
+        cur = [op[1] * S, op[2] * S];
+      }
+    }
+    const g = new T.BufferGeometry();
+    g.setAttribute('position', new T.Float32BufferAttribute(pts, 3));
+    const m = new T.LineBasicMaterial({ color: new T.Color(0.45, 1.2, 0.55), transparent: true, opacity: 0.85, blending: T.AdditiveBlending, depthWrite: false });
+    const lines = new T.LineSegments(g, m);
+    const grp = new T.Group();
+    grp.add(lines);
+    return grp;
   }
 
   /** Terrain height at x (feet) on the flight plane: the original's table,
@@ -441,13 +501,20 @@ export class Roadster {
       stall.position.set(i * 9, 2.5, 14);
       g.add(stall);
     }
+    // The first customer: the 1973 lander, in light, at the end stall.
+    const lander = this.buildLander();
+    lander.position.set(-40, 0, 22);
+    g.add(lander);
     return g;
   }
 
-  /** The car: a first model from primitives, white, low, long. */
-  buildCar() {
+  /** The car: a first model from primitives, white, low, long. `kind` is
+   * 'live', 'parked' (left by an earlier landing) or 'wreck'. */
+  buildCar(kind = 'live') {
     const g = new T.Group();
-    const paint = new T.MeshPhysicalMaterial({ color: 0xf2f2ee, roughness: 0.35, metalness: 0.15, clearcoat: 0.8, clearcoatRoughness: 0.2 });
+    const paint = kind === 'wreck'
+      ? new T.MeshStandardMaterial({ color: 0x4a4744, roughness: 0.9, metalness: 0.1 })
+      : new T.MeshPhysicalMaterial({ color: 0xf2f2ee, roughness: 0.35, metalness: 0.15, clearcoat: 0.8, clearcoatRoughness: 0.2 });
     const glass = new T.MeshPhysicalMaterial({ color: 0x1a2430, roughness: 0.1, metalness: 0.6, transparent: true, opacity: 0.85 });
     const rubber = new T.MeshStandardMaterial({ color: 0x151515, roughness: 0.9 });
     const rim = new T.MeshStandardMaterial({ color: 0x9a9a9a, roughness: 0.3, metalness: 0.9 });
@@ -477,7 +544,7 @@ export class Roadster {
     canopy.castShadow = true;
     g.add(canopy);
     // Wheels.
-    this.wheels = [];
+    const wheels = [];
     for (const [x, z] of [[L * 0.32, W / 2], [L * 0.32, -W / 2], [-L * 0.3, W / 2], [-L * 0.3, -W / 2]]) {
       const w = new T.Group();
       const tyre = new T.Mesh(new T.CylinderGeometry(1.25, 1.25, 0.9, 24), rubber);
@@ -488,30 +555,64 @@ export class Roadster {
       w.position.set(x, 1.25, z);
       tyre.castShadow = true;
       g.add(w);
-      this.wheels.push(w);
+      wheels.push(w);
     }
     // Thrusters: an array under the floor, and four at the corners.
     const nozzle = new T.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.4, metalness: 0.8 });
-    this.nozzles = [];
+    const nozzles = [];
     for (const x of [-L * 0.2, 0, L * 0.2]) {
       const n = new T.Mesh(new T.CylinderGeometry(0.35, 0.5, 0.5, 12), nozzle);
       n.position.set(x, 0.3, 0);
       g.add(n);
-      this.nozzles.push(n);
+      nozzles.push(n);
     }
-    this.corners = [];
+    const corners = [];
     for (const [x, z] of [[L * 0.42, W * 0.35], [L * 0.42, -W * 0.35], [-L * 0.45, W * 0.35], [-L * 0.45, -W * 0.35]]) {
       const n = new T.Mesh(new T.CylinderGeometry(0.18, 0.24, 0.4, 10), nozzle);
       n.position.set(x, 0.8, z);
       g.add(n);
-      this.corners.push(n);
+      corners.push(n);
     }
-    // Headlights, on.
-    const lamp = new T.MeshBasicMaterial({ color: 0xfff6e0 });
-    for (const z of [-W * 0.33, W * 0.33]) {
-      const l = new T.Mesh(new T.BoxGeometry(0.2, 0.35, 1.4), lamp);
-      l.position.set(L / 2 + 0.05, 1.6, z);
-      g.add(l);
+    // Headlights, on (off on a wreck).
+    if (kind !== 'wreck') {
+      const lamp = new T.MeshBasicMaterial({ color: 0xfff6e0 });
+      for (const z of [-W * 0.33, W * 0.33]) {
+        const l = new T.Mesh(new T.BoxGeometry(0.2, 0.35, 1.4), lamp);
+        l.position.set(L / 2 + 0.05, 1.6, z);
+        g.add(l);
+      }
+    }
+    // A thin light bar across the tail, as cars have now.
+    if (kind !== 'wreck') {
+      const tail = new T.Mesh(new T.BoxGeometry(0.15, 0.18, W * 0.8), new T.MeshBasicMaterial({ color: 0xff2a1a }));
+      tail.position.set(-L / 2 - 0.1, 2.2, 0);
+      g.add(tail);
+    }
+    // The driver, seated: head and shoulders under the canopy, the left
+    // arm out on the sill, as in the photographs from 2018.
+    if (kind === 'live') {
+      const suit = new T.MeshStandardMaterial({ color: 0xf4f4f0, roughness: 0.8 });
+      const visor = new T.MeshPhysicalMaterial({ color: 0x0c0c10, roughness: 0.1, metalness: 0.7 });
+      const seated = new T.Group();
+      const torso = new T.Mesh(new T.CapsuleGeometry(0.5, 0.9, 4, 10), suit);
+      torso.position.set(-L * 0.12, 2.7, -0.9);
+      const helmet = new T.Mesh(new T.SphereGeometry(0.55, 16, 12), suit);
+      helmet.position.set(-L * 0.12, 3.75, -0.9);
+      const face = new T.Mesh(new T.SphereGeometry(0.45, 16, 12, 0, Math.PI), visor);
+      face.position.set(-L * 0.12 + 0.18, 3.75, -0.9);
+      face.rotation.y = -Math.PI / 2;
+      const arm = new T.Mesh(new T.CapsuleGeometry(0.16, 1.1, 4, 8), suit);
+      arm.position.set(-L * 0.12 + 0.3, 2.75, -W / 2 - 0.1);
+      arm.rotation.z = Math.PI / 2;
+      const forearm = new T.Mesh(new T.CapsuleGeometry(0.15, 0.9, 4, 8), suit);
+      forearm.position.set(-L * 0.12 + 0.9, 2.95, -W / 2 - 0.2);
+      forearm.rotation.z = Math.PI / 2 - 0.5;
+      seated.add(torso, helmet, face, arm, forearm);
+      g.add(seated);
+      this.seated = seated;
+      this.wheels = wheels;
+      this.nozzles = nozzles;
+      this.corners = corners;
     }
     return g;
   }
@@ -525,6 +626,8 @@ export class Roadster {
       this.renderer.setSize(w, h, false);
       this.composer.setSize(w * this.renderer.getPixelRatio(), h * this.renderer.getPixelRatio());
       this.camera.aspect = w / h;
+      // A wider view on a tall screen, so the horizon stays in it.
+      this.camera.fov = w / h < 1 ? 62 : w / h < 1.4 ? 50 : 42;
       this.camera.updateProjectionMatrix();
     }
   }
@@ -532,7 +635,9 @@ export class Roadster {
   /** Where the car's reference point is, from the state, interpolated
    * between the program's steps with its own velocities. */
   poseFrom(state, now) {
-    const dt = Math.min(0.25, (now - this.lastStateWall) / 1000);
+    // Wall time since the step, in machine seconds (the page may run the
+    // machine slower or faster than real time).
+    const dt = Math.min(0.25, ((now - this.lastStateWall) / 1000) * (this.rate || 1));
     return {
       x: state.hordis + (state.horvel / 10) * dt,
       y: state.verdis + (state.vervel / 10) * dt,
@@ -597,7 +702,10 @@ export class Roadster {
     // and the ground under it, from in front and a little above. Far out,
     // it stands well back and higher, so the whole valley reads.
     const close = this.scaleY < 1;
-    const d = close ? T.MathUtils.clamp(alt * 0.9 + 85, 80, 700) : T.MathUtils.clamp(alt * 1.9 + 900, 1200, 30000);
+    // Far enough back that the car and the ground under it both fit the
+    // frame, whatever its shape (phones are tall and narrow).
+    const fit = (alt + 30) / (2 * 0.78 * Math.tan(T.MathUtils.degToRad(this.camera.fov / 2)));
+    const d = close ? T.MathUtils.clamp(Math.max(alt * 0.9 + 85, fit), 80, 900) : T.MathUtils.clamp(Math.max(alt * 1.9 + 900, fit), 1200, 36000);
     const look = new T.Vector3(this.pose.x + (state.horvel / 10) * 0.6, ground + alt * (close ? 0.5 : 0.6) + 6, 0);
     let d2 = d;
     if (this.walking && this.driverX !== undefined) {
@@ -651,18 +759,15 @@ export class Roadster {
         this.dust.emit(foot, (1 - alt / 120) * (thrust / maxThrust) * 900 * dt, scale);
       }
     }
-    // Attitude puffs when turning.
+    // Attitude puffs when turning: the pair that lifts its end fires down.
     if (!this.exploded && turning !== 0) {
       const q = new T.Quaternion().setFromEuler(this.car.rotation);
-      const cw = turning > 0;
-      // Clockwise: push the nose down and the tail up.
-      const pairs = cw ? [[0, 1, -1], [2, 3, 1]] : [[0, 1, 1], [2, 3, -1]];
-      for (const [i, j, dir] of pairs) {
-        for (const c of [this.corners[i], this.corners[j]]) {
-          const p = c.getWorldPosition(new T.Vector3());
-          const v = new T.Vector3(0, -dir, 0).applyQuaternion(q);
-          this.plume.emit(p, v, 120 * dt, scale * 0.6, 0.4);
-        }
+      const down = new T.Vector3(0, -1, 0).applyQuaternion(q);
+      // Clockwise (nose down): the rear pair lifts the tail.
+      const pair = turning > 0 ? [this.corners[2], this.corners[3]] : [this.corners[0], this.corners[1]];
+      for (const c of pair) {
+        const p = c.getWorldPosition(new T.Vector3());
+        this.plume.emit(p, down, 140 * dt, scale * 0.6, 0.45);
       }
     }
     this.plume.step(dt);
@@ -673,6 +778,10 @@ export class Roadster {
     if (state.shipdp !== 0) this.shipSeen = true;
     if (this.shipSeen && state.shipdp === 0 && !this.exploded) this.explode();
     if (this.debris) this.debris.step(dt, (x) => this.height(x));
+    if (this.rereadAt && this.rereadAt.length && now >= this.rereadAt[0]) {
+      this.rereadAt.shift();
+      this.rereadTerrain();
+    }
     // The diner, if the program says it has been destroyed.
     if (this.diner) this.dinerStands(!!(state.diner & 1));
 
@@ -683,6 +792,7 @@ export class Roadster {
     this.lastManx = state.manx;
     if (state.verdis > 20000 || this.exploded) this.walking = false;
     this.driver.visible = !!this.walking;
+    if (this.seated) this.seated.visible = !this.walking;
     if (this.walking) {
       const mx = state.lefeet + (state.manx * 2) / 3;
       const my = this.height(mx);
@@ -719,6 +829,8 @@ export class Roadster {
 
   explode() {
     this.exploded = true;
+    // The program digs a crater as it explodes (ALTER): read it soon.
+    this.rereadAt = [performance.now() + 100, performance.now() + 1200];
     this.debris = new Debris(this.scene, this.car.position.clone(), this.car.rotation.clone(), this.car.scale.x);
     const burst = new T.Vector3(0, 1, 0);
     this.plume.emit(this.car.position, burst, 600, this.car.scale.x * 3, 1);
@@ -741,7 +853,28 @@ export class Roadster {
   }
 
   /** A new game: the car is whole again. */
+  /** The terrain as the program has it now: a crash digs a crater. */
+  rereadTerrain() {
+    if (!this.peek) return;
+    let changed = false;
+    for (let i = 0; i < TERRAIN_N; i++) {
+      const v = (this.peek(this.symbols.TERAIN + 2 * i) << 16) >> 16;
+      if (v !== this.terrain[i]) {
+        this.terrain[i] = v;
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.fillTerrain();
+      this.placeFeatures();
+    }
+  }
+
   reset() {
+    if (this.peek) {
+      this.rereadTerrain();
+      this.buildLeftovers();
+    }
     this.exploded = false;
     this.shipSeen = false;
     this.walking = false;
@@ -798,7 +931,8 @@ class Plume {
       this.next = (this.next + 1) % this.n;
       const spread = 0.35;
       const sx = (Math.random() - 0.5) * spread, sy = (Math.random() - 0.5) * spread, sz = (Math.random() - 0.5) * spread;
-      const speed = (60 + 50 * Math.random()) * strength * scale;
+      // Cold gas leaves fast whatever the throttle; the throttle sets how much.
+      const speed = (150 + 100 * Math.random()) * (0.5 + 0.5 * strength) * scale;
       this.pos[i * 3] = p.x + (Math.random() - 0.5) * 0.6 * scale;
       this.pos[i * 3 + 1] = p.y + (Math.random() - 0.5) * 0.6 * scale;
       this.pos[i * 3 + 2] = p.z + (Math.random() - 0.5) * 0.6 * scale;
@@ -827,9 +961,9 @@ class Plume {
       // Gas expands and thins.
       this.size[i] *= 1 + 3.5 * dt;
       this.alpha[i] = (1 - f) * (1 - f) * 0.9;
-      vel[i * 3] *= 1 - 1.5 * dt;
-      vel[i * 3 + 1] *= 1 - 1.5 * dt;
-      vel[i * 3 + 2] *= 1 - 1.5 * dt;
+      vel[i * 3] *= 1 - 0.8 * dt;
+      vel[i * 3 + 1] *= 1 - 0.8 * dt;
+      vel[i * 3 + 2] *= 1 - 0.8 * dt;
     }
     const g = this.points.geometry;
     g.attributes.position.needsUpdate = true;
@@ -863,8 +997,8 @@ class Dust extends Plume {
       this.vel[i * 3 + 2] = Math.sin(ang) * r * 0.6;
       this.life[i] = 1.2 + 1.5 * Math.random();
       this.age[i] = 0;
-      this.size[i] = (1.0 + 1.5 * Math.random()) * scale;
-      this.alpha[i] = 0.5;
+      this.size[i] = (0.6 + 0.9 * Math.random()) * scale;
+      this.alpha[i] = 0.35;
     }
   }
 
@@ -888,8 +1022,8 @@ class Dust extends Plume {
         vel[i * 3] *= 0.5;
         vel[i * 3 + 2] *= 0.5;
       }
-      this.size[i] *= 1 + 0.4 * dt;
-      this.alpha[i] = 0.5 * (1 - f);
+      this.size[i] *= 1 + 0.3 * dt;
+      this.alpha[i] = 0.35 * (1 - f);
     }
     const geo = this.points.geometry;
     geo.attributes.position.needsUpdate = true;

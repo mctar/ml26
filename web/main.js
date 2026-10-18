@@ -129,6 +129,7 @@ class Page {
       this.roadster.load(this.engine.symbols, (a) => this.engine.peek(a));
       this.roadster.maxThrust = this.engine.symbols.MAXTRS;
     }
+    this.roadster.rate = this.rate;
     if (this.state && this.roadster.terrain) this.roadster.update(this.state, now, dt);
     this.sounds();
     this.hud();
@@ -202,6 +203,8 @@ class Page {
       $('r-hv').textContent = (s.horvel / 10).toFixed(1);
       $('r-air').textContent = Math.max(0, Math.round(s.fuel / 10)).toLocaleString('en-US');
       $('r-air-box').classList.toggle('warn', !!s.fuel_low);
+      // The car's own screen, when the air runs low.
+      $('r-air-box').querySelector('.label').textContent = s.fuel_low ? "Don't panic" : 'Air left';
       $('r-pct').textContent = s.percnt;
       const pct = Math.max(0, Math.min(100, s.percnt));
       const th = $('throttle');

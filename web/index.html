@@ -65,11 +65,15 @@
   #arrival svg { display: block; margin: 0 auto 10px; max-width: 90vw; height: auto; font-family: var(--sans); }
   #arrival h1 { font-size: 13px; letter-spacing: 0.3em; text-transform: uppercase; font-weight: 500; color: var(--dim); margin: 0 0 10px; }
   #arrival p { font-size: 16px; color: var(--fg); margin: 0; }
+  #arrival .brief { max-width: 460px; margin: 18px auto 0; font-size: 13px; line-height: 1.55; color: #a9aaa4; }
   #arrival .skip { margin-top: 28px; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); }
   @media (max-width: 640px) {
-    .readout { min-width: 72px; } .readout .value { font-size: 18px; } #readouts { gap: 16px; }
-    #message { font-size: 13px; bottom: 84px; }
-    #throttle { height: 36vh; }
+    .readout { min-width: 72px; } .readout .value { font-size: 18px; } #readouts { gap: 14px 18px; right: 16px; }
+    #topright { top: auto; right: auto; left: 16px; bottom: max(84px, calc(env(safe-area-inset-bottom) + 78px)); }
+    #message { font-size: 13px; bottom: 118px; }
+    #throttle { height: 34vh; top: 46%; }
+    #turn { left: 14px; right: 14px; justify-content: space-between; }
+    #turn button { width: 20%; height: 48px; }
   }
 </style>
 </head>
@@ -116,10 +120,11 @@
       <text x="74" y="-6" fill="#3b6fd6" font-size="7" letter-spacing="1">EARTH</text>
       <text x="-130" y="-6" fill="#c1440e" font-size="7" letter-spacing="1">MARS</text>
       <text id="orbit-label" x="0" y="130" fill="#8e8f8a" font-size="7.5" letter-spacing="1" text-anchor="middle">LAUNCHED 6 FEBRUARY 2018 · 0.99 TO 1.66 AU · ONE ORBIT IN 1.5 YEARS</text>
-      <text x="0" y="142" fill="#5a5b57" font-size="7.5" letter-spacing="1" text-anchor="middle">CROSSES MARS'S ORBIT TWICE A YEAR. NEVER MEETS IT.</text>
+      <text x="0" y="142" fill="#5a5b57" font-size="7.5" letter-spacing="1" text-anchor="middle">CROSSES MARS'S ORBIT TWICE EACH TIME ROUND. HAS NEVER MET IT.</text>
     </svg>
     <h1>Moonlander</h1>
     <p>Roadster edition</p>
+    <p class="brief">Because of changes in the national policy, the lunar exploratory program is once again functioning, and you have been chosen as the pilot. The agency chose the best of the last of the human-driven cars. Its onboard computer is a PDP-11, and it has just died on you. You must now land under manual control.</p>
     <p class="skip" id="arrival-note">Leaving solar orbit for the Moon</p>
   </div>
 </div>
