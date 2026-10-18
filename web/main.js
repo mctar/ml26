@@ -66,6 +66,14 @@ class Page {
   input(field, value) {
     if (this.replay && field !== 'stop') return; // a replay drives the machine, not the hands
     this.pending.push([field, value]);
+    if (field === 'throttle' || field === 'turning' || field === 'pilot') this.coached();
+  }
+
+  /** The first move made: the coaching line goes. */
+  coached() {
+    if (this.coachDone) return;
+    this.coachDone = true;
+    $('coach').style.opacity = '0';
   }
 
   /** The engine's callback, at least once per machine millisecond. */

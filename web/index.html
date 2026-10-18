@@ -28,8 +28,9 @@
   .readout .value { font-size: 22px; font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; line-height: 1.15; }
   .readout .unit { font-size: 11px; color: var(--dim); margin-left: 3px; }
   .readout.warn .value { color: var(--warn); }
-  #message { position: absolute; left: 50%; bottom: max(26px, calc(env(safe-area-inset-bottom) + 20px)); transform: translateX(-50%); max-width: min(90vw, 760px); text-align: center; font-size: 15px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg); text-shadow: 0 0 12px rgba(0,0,0,0.8); transition: opacity 0.4s; }
+  #message { position: absolute; left: 50%; bottom: max(26px, calc(env(safe-area-inset-bottom) + 20px)); transform: translateX(-50%); max-width: min(90vw, 760px); text-align: center; font-size: 15px; letter-spacing: 0.04em; color: var(--fg); text-shadow: 0 0 12px rgba(0,0,0,0.8); transition: opacity 0.4s; }
   #message:empty { opacity: 0; }
+  #coach { position: absolute; left: 50%; bottom: max(56px, calc(env(safe-area-inset-bottom) + 50px)); transform: translateX(-50%); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); white-space: nowrap; transition: opacity 0.8s; }
 
   #throttle { position: absolute; right: max(18px, env(safe-area-inset-right)); top: 50%; transform: translateY(-50%); width: 44px; height: min(46vh, 340px); pointer-events: auto; touch-action: none; cursor: ns-resize; }
   #throttle * { pointer-events: none; }
@@ -71,6 +72,7 @@
     .readout { min-width: 72px; } .readout .value { font-size: 18px; } #readouts { gap: 14px 18px; right: 16px; }
     #topright { top: auto; right: auto; left: 16px; bottom: max(84px, calc(env(safe-area-inset-bottom) + 78px)); }
     #message { font-size: 13px; bottom: 118px; }
+    #coach { bottom: 150px; }
     #throttle { height: 34vh; top: 46%; }
     #turn { left: 14px; right: 14px; justify-content: space-between; }
     #turn button { width: 20%; height: 48px; }
@@ -105,6 +107,7 @@
     <button data-turn="2" title="Shift+Right">&#x27F9;</button>
   </div>
   <div id="message"></div>
+  <div id="coach">Drag the thrust bar. The arrows turn.</div>
 </div>
 <div id="hint" class="hidden"></div>
 <div id="arrival">
@@ -139,6 +142,8 @@
     <p>The terrain is Burness's table at true scale, which makes it a range of needles up to 13,282 feet tall. The program measures your height against that table until you are below 450 feet; then it switches to its close-up and treats the ground as a quarter of its height, and the 1973 display cut to a new picture at that moment so that nobody noticed. This version keeps both heights and cuts the camera in the same place. The mountain the readout says you are 10,000 feet above is the mountain you hit.</p>
     <h2>Controls</h2>
     <p>Drag the thrust bar, or use the up and down keys. The arrows turn; Shift makes them the big arrows. Under the hood every one of these moves a light pen onto the controls Burness drew, and the program reads nothing but the pen. V shows the 1973 tube. R starts again. S copies a link that replays this flight exactly.</p>
+    <h2>Watch</h2>
+    <p><a href="?pilot=1">The autopilot lands at the diner</a> and the driver goes in for the order. <a href="?pilot=2">The autopilot lands in the open</a> and the driver plants a flag. <a href="?view=1973">The 1973 tube</a>, with the mouse as the light pen.</p>
     <h2>Sources</h2>
     <p><a href="https://github.com/mctar/moonlander">The recovery</a>, with the hardware model and the journal. <a href="https://github.com/mctar/ml26">This site's source</a>. The car and the diner are drawn from public photographs and carry no marks; nothing here is affiliated with or endorsed by anyone who makes cars. The quotations are on the record: the unveil of 15 October 2026 as reported by TechCrunch and Euronews, the 2018 launch as recorded on Wikipedia.</p>
     <p>MIT licence. Moonlander is Jack Burness's work.</p>
