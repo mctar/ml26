@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = ["engine"]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "MIT"
+
+# The engine is built once, for the browser. Small and fast, no unwinding:
+# the browser build is instrumented afterwards by Binaryen's Asyncify pass,
+# which is what lets the translation's nested routines pause for a frame.
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+debug = false

@@ -1,0 +1,15 @@
+[package]
+name = "ml26-engine"
+description = "Burness's Moonlander (GT40, 1973), the recovery's translation, running in a browser"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# The recovery: the translation of the Mare Assabet build and the GT40
+# model it runs on. Pinned to a commit so the physics cannot drift under us.
+moonlander = { git = "https://github.com/mctar/moonlander", rev = "ff2079c60d57843ab98f885899d58ec28d97721a" }
+gt40 = { git = "https://github.com/mctar/moonlander", rev = "ff2079c60d57843ab98f885899d58ec28d97721a" }

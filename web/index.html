@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Moonlander</title>
+<meta name="description" content="Jack Burness's Moonlander (DEC GT40, 1973), the recovered program running in your browser, on a modelled P39 tube.">
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #050605; color: #8a9a8a; font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  body { display: grid; grid-template-rows: 1fr auto; min-height: 100dvh; }
+  main { display: grid; place-items: center; padding: 8px; min-height: 0; }
+  #tube { display: block; touch-action: none; cursor: crosshair; background: #050605; }
+  footer { display: flex; gap: 16px; justify-content: space-between; align-items: baseline; padding: 6px 14px 10px; color: #5d6b5d; }
+  footer a { color: #7c9a7c; text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+  #status { min-width: 4em; text-align: right; font-variant-numeric: tabular-nums; }
+  @media (max-width: 640px) { footer { font-size: 11px; flex-wrap: wrap; } }
+</style>
+</head>
+<body>
+<main><canvas id="tube" width="1024" height="768"></canvas></main>
+<footer>
+  <span id="hint">The mouse is the light pen: hold it on the bar for throttle, on the arrows to turn. Keys: arrows turn, Shift for the big arrows, up and down for throttle. R restarts, S copies a replay link, A hands over to the autopilot.</span>
+  <span><a href="https://github.com/mctar/ml26">source</a> · <a href="https://github.com/mctar/moonlander">the recovery</a></span>
+  <span id="status"></span>
+</footer>
+<script type="module" src="./main.js"></script>
+</body>
+</html>
