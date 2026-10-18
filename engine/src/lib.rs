@@ -95,6 +95,14 @@ pub struct State {
     pub lpflg1: i32,
     /// Low fuel message on (LPSW not a display stop).
     pub fuel_low: i32,
+    /// The ship is being displayed (SHIPDP points at its buffer); cleared
+    /// when it is destroyed.
+    pub shipdp: i32,
+    /// The flame is being drawn (FSUBC) and dust is on (DUSTON).
+    pub flame: i32,
+    pub dust: i32,
+    /// The diner still stands (MACTHR), and is drawn (MACON).
+    pub diner: i32,
     /// Bells rung so far.
     pub bells: i32,
     /// Where the light pen is now, if on the face.
@@ -325,6 +333,10 @@ impl Side {
         s.hitcnt = word(bus, HITCNT);
         s.lpflg1 = uword(bus, LPFLG1);
         s.fuel_low = (uword(bus, LPSW) != DISTOP as i32) as i32;
+        s.shipdp = uword(bus, SHIPDP);
+        s.flame = uword(bus, FSUBC);
+        s.dust = uword(bus, DUSTON);
+        s.diner = (uword(bus, MACTHR) != 0) as i32 | ((uword(bus, MACON) != 0) as i32) << 1;
         s.bells = self.bells;
         s.pen_on = self.pen.is_some() as i32;
         if let Some(p) = self.pen {

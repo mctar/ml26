@@ -4,6 +4,7 @@
 import { Engine, messageName, MESSAGES } from './engine/engine.js';
 import { Phosphor } from './phosphor.js';
 import { Roadster } from './roadster.js';
+import { Sound } from './sound.js';
 
 const $ = (id) => document.getElementById(id);
 const tube = $('tube');
@@ -47,9 +48,9 @@ class Page {
     this.taken = new Float32Array(0);
     this.takenAt = 0;
     this.frames = 0;
-    this.bells = 0;
-    this.audio = null;
+    this.sound = new Sound();
     this.state = null;
+    this.prev = null;
     this.lastMessage = undefined;
     this.tMachine = 0;
     this.tRender = 0;
@@ -118,23 +119,44 @@ class Page {
     return this.state && this.state.t < GAME_START && !this.replay;
   }
 
-  draw(now) {
+  draw(now, force = false) {
     const dt = Math.min(0.1, (now - (this.lastFrame || now)) / 1000);
     this.lastFrame = now;
     this.frames++;
-    if (this.arrival && this.state && this.state.t >= GAME_START) this.landed();
-    if (this.view === 'tube') {
-      this.fitTube();
-      this.phosphor.frame(this.takenAt, this.taken, this.takenAt);
-    } else {
-      if (!this.roadster.terrain && this.engine.game) {
-        this.roadster.load(this.engine.symbols, (a) => this.engine.peek(a));
-        this.roadster.maxThrust = this.engine.symbols.MAXTRS;
-      }
-      if (this.state && this.roadster.terrain) this.roadster.frame(this.state, now, dt);
+    if (this.arrival) this.orbit(now);
+    if (this.arrival && this.state && this.state.t >= GAME_START && now - this.arrivalSince > 3600) this.landed();
+    if (!this.roadster.terrain && this.engine.game) {
+      this.roadster.load(this.engine.symbols, (a) => this.engine.peek(a));
+      this.roadster.maxThrust = this.engine.symbols.MAXTRS;
     }
+    if (this.state && this.roadster.terrain) this.roadster.update(this.state, now, dt);
     this.sounds();
     this.hud();
+    if (this.norender && !force) return;
+    // The tube is drawn in both views: on the page, or on the diner's screens.
+    this.fitTube();
+    this.phosphor.frame(this.takenAt, this.taken, this.takenAt);
+    if (this.view !== 'tube') this.roadster.render();
+  }
+
+  /** The car goes round its orbit on the arrival card, and leaves. */
+  orbit(now) {
+    const car = $('car'), earth = $('earth'), mars = $('mars');
+    if (!car) return;
+    const s = (now - this.arrivalSince) / 1000;
+    // Years pass quickly: the Roadster's 1.525-year period, Earth's one,
+    // Mars's 1.88, from the launch geometry (roughly: Earth at the car).
+    const yrs = s * 1.6;
+    const a = 92.75, b = 89.7, c = -23.7;
+    const th = (yrs / 1.525) * Math.PI * 2;
+    car.setAttribute('cx', (c + a * Math.cos(th)).toFixed(2));
+    car.setAttribute('cy', (-b * Math.sin(th)).toFixed(2));
+    const te = yrs * Math.PI * 2;
+    earth.setAttribute('cx', (70 * Math.cos(te)).toFixed(2));
+    earth.setAttribute('cy', (-70 * Math.sin(te)).toFixed(2));
+    const tm = Math.PI + (yrs / 1.88) * Math.PI * 2;
+    mars.setAttribute('cx', (106.7 * Math.cos(tm)).toFixed(2));
+    mars.setAttribute('cy', (-106.7 * Math.sin(tm)).toFixed(2));
   }
 
   /** The arrival card comes down and the game is on. */
@@ -147,7 +169,8 @@ class Page {
 
   fitTube() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const w = Math.round(tube.clientWidth * dpr), h = Math.round(tube.clientHeight * dpr);
+    const onPage = this.view === 'tube';
+    const w = onPage ? Math.round(tube.clientWidth * dpr) : 512, h = onPage ? Math.round(tube.clientHeight * dpr) : 384;
     if (tube.width !== w || tube.height !== h) {
       tube.width = w;
       tube.height = h;
@@ -155,26 +178,18 @@ class Page {
   }
 
   sounds() {
-    const s = this.state;
+    const s = this.state, p = this.prev;
     if (!s) return;
-    if (s.bells > this.bells) {
-      if (this.audio) for (let i = this.bells; i < s.bells && i < this.bells + 3; i++) this.bell();
-      this.bells = s.bells;
+    const maxThrust = this.engine.symbols.MAXTRS || 1;
+    const exploded = this.roadster.exploded;
+    this.sound.update(exploded ? 0 : Math.max(0, s.thrust) / maxThrust, s, 0);
+    if (p) {
+      if (s.radius > 0 && p.radius === 0) this.sound.explosion();
+      else if (s.radary <= 0 && p.radary > 0 && s.verdis < 450 && !exploded) this.sound.contact(p.vervel / 10);
+      if (this.roadster.puffing && !this.puffWas) this.sound.puff();
     }
-  }
-
-  /** The GT40's bell: the LK40's beeper, a short square-ish tone. */
-  bell() {
-    const ac = this.audio;
-    const o = ac.createOscillator();
-    const g = ac.createGain();
-    o.type = 'square';
-    o.frequency.value = 1000;
-    g.gain.setValueAtTime(0.05, ac.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.0005, ac.currentTime + 0.12);
-    o.connect(g).connect(ac.destination);
-    o.start();
-    o.stop(ac.currentTime + 0.13);
+    this.puffWas = this.roadster.puffing;
+    this.prev = { ...s };
   }
 
   hud() {
@@ -220,7 +235,7 @@ class Page {
 
   /** For tests: draw the current view once and return it as a PNG. */
   snap() {
-    this.draw(performance.now());
+    this.draw(performance.now(), true);
     return (this.view === 'tube' ? tube : sceneCanvas).toDataURL('image/png');
   }
 
@@ -253,11 +268,12 @@ class Page {
     const q = new URLSearchParams(location.search);
     this.debug = q.has('debug');
     this.userRate = Number(q.get('rate')) || 1;
+    this.norender = q.has('norender');
     this.fastRate = Math.max(this.userRate, 24);
     this.rate = this.userRate;
     if (q.get('view') === '1973' || q.has('tube')) this.view = 'tube';
     this.phosphor = new Phosphor(tube);
-    this.roadster = new Roadster(sceneCanvas);
+    this.roadster = new Roadster(sceneCanvas, tube);
     this.setView(this.view);
 
     const module = await WebAssembly.compileStreaming(fetch(new URL('./engine/engine.wasm', import.meta.url)));
@@ -281,7 +297,8 @@ class Page {
       this.originWall = performance.now();
       this.originT = 0;
       this.target = LEAD;
-      this.bells = 0;
+      this.sound.bells = 0;
+      this.prev = null;
       this.recording = [];
       this.replayAt = 0;
       this.wanted = undefined;
@@ -293,6 +310,7 @@ class Page {
         $('arrival').classList.remove('hidden');
         $('arrival').style.opacity = '1';
       }
+      this.arrivalSince = performance.now();
       const code = await this.engine.run();
       if (code !== 0) {
         $('status').textContent = ['', 'HALTED', 'BUS ERROR', 'CONTROL LEFT THE PROGRAM'][code] || `STOPPED (${code})`;
@@ -464,14 +482,11 @@ class Page {
 
   /** Sound can start only from a gesture. */
   wake() {
-    if (!this.audio) {
-      try {
-        this.audio = new (window.AudioContext || window.webkitAudioContext)();
-      } catch (e) {
-        /* no sound */
-      }
+    try {
+      this.sound.wake();
+    } catch (e) {
+      /* no sound */
     }
-    if (this.audio?.state === 'suspended') this.audio.resume();
   }
 
   restart() {

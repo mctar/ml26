@@ -14,9 +14,9 @@ const STATE_WORDS = {
   angle: 4, turn: 5, horvel: 6, vervel: 7, hordis: 8, verdis: 9, horacc: 10, veracc: 11, accel: 12,
   percnt: 13, thrust: 14, fuel: 15, weight: 16, time: 17, bigxct: 18, radary: 19, avery: 20, avert: 21,
   leftd: 22, lefeet: 23, indexl: 24, dnum: 25, sysmes: 26, radius: 27, manx: 28, many: 29, flagx: 30,
-  flagy: 31, hitcnt: 32, lpflg1: 33, fuel_low: 34, bells: 35, pen_on: 36, pen_x: 37, pen_y: 38,
+  flagy: 31, hitcnt: 32, lpflg1: 33, fuel_low: 34, shipdp: 35, flame: 36, dust: 37, diner: 38, bells: 39, pen_on: 40, pen_x: 41, pen_y: 42,
 };
-const STATE_SIZE = 160; // 39 words, padded to the f64 alignment
+const STATE_SIZE = 176; // 43 words, padded to the f64 alignment
 const INPUT_WORDS = { pen_x: 0, pen_y: 1, pen_down: 2, throttle: 3, turning: 4, choice: 5, slot: 6, pilot: 7, stop: 8 };
 const INPUT_SIZE = 9 * 4;
 const BEAM_WORDS = 8;
