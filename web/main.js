@@ -200,9 +200,8 @@ class Page {
   sounds() {
     const s = this.state, p = this.prev;
     if (!s) return;
-    const maxThrust = this.engine.symbols.MAXTRS || 1;
     const exploded = this.roadster.exploded;
-    this.sound.update(exploded ? 0 : Math.max(0, s.thrust) / maxThrust, s, 0);
+    this.sound.update(exploded ? 0 : this.roadster.thrustNow, s, 0);
     if (p) {
       if (s.radius > 0 && p.radius === 0) this.sound.explosion();
       else if (s.radary <= 0 && p.radary > 0 && s.verdis < 450 && !exploded) this.sound.contact(p.vervel / 10);

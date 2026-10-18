@@ -1,3 +1,4 @@
 target
 node_modules
 web/engine/engine.wasm
+web/.lab/

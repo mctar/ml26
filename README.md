@@ -20,15 +20,28 @@ Live at [moonlander.btrbot.com](https://moonlander.btrbot.com).
   Binaryen's Asyncify, which lets a program that never returns pause for a
   frame; `phosphor.js` is the recovery's P39 phosphor model on the GPU;
   `roadster.js` is the 2026 view (three.js: the terrain from the TERAIN
-  table, the car, the gas, the diner, the driver, what earlier games left
-  behind); `sound.js` is what the driver hears; `main.js` paces the
+  table, the diner, what earlier games left behind, the camera, with the
+  pieces from `world/`); `sound.js` is what the driver hears; `main.js` paces the
   machine against the clock, keeps the two views, and turns the controls
   into the pen. `vendor/three.js` is a bundled subset of three.js, built
   from `vendor/three-entry.js` with esbuild.
-- `web/astronaut.js`: the driver, a jointed figure posed in code (seated,
-  climbing, loping, waving, planting, saluting); `web/radio.js` plays the
-  spoken messages in `web/radio/`, made by `tools/radio/make.sh` from
-  `tools/radio/lines.json` with pocket-tts and ffmpeg.
+- `web/world/`: the pieces of the 2026 view. `car.js` is the Roadster,
+  lofted from a few profiles, on springs that keep it on the ground;
+  `astronaut.js` the driver, posed by two-bone inverse kinematics, with a
+  low-gravity lope that plants his feet where they land; `choreo.js` the
+  climb out and back in, keyed in the car's frame; `driver.js` runs him
+  from the program's own man (PALSY, PALNOR, MOVMAN), early enough to be
+  on time; `props.js` the flag and the order; `plume.js` the cold-gas
+  jets, raymarched; `ballistic.js` dust and ejecta on vacuum trajectories;
+  `debris.js` a crash; `prints.js` boot prints.
+- `web/lab.html`: a page for checking the 2026 view, not linked from the
+  site. It replays flights recorded by `tools/lab/record.mjs` through the
+  real view frame by frame, and measures every frame: the driver's soles
+  against the ground, every part of him against the car's body and
+  fittings, the tyres and hull against the ground.
+- `web/radio.js` plays the spoken messages in `web/radio/`, made by
+  `tools/radio/make.sh` from `tools/radio/lines.json` with pocket-tts and
+  ffmpeg.
 - `build.sh`: Rust to wasm32, then `wasm-opt --asyncify`.
 - `.github/workflows/pages.yml`: tests, builds and publishes the site.
 
