@@ -518,29 +518,37 @@ export class Roadster {
     const glass = new T.MeshPhysicalMaterial({ color: 0x1a2430, roughness: 0.1, metalness: 0.6, transparent: true, opacity: 0.85 });
     const rubber = new T.MeshStandardMaterial({ color: 0x151515, roughness: 0.9 });
     const rim = new T.MeshStandardMaterial({ color: 0x9a9a9a, roughness: 0.3, metalness: 0.9 });
-    const L = CAR_LENGTH, W = 6.6, H = 3.6;
-    // Side profile, nose to the +x, extruded across z.
+    const L = CAR_LENGTH, W = 6.8;
+    // Side profile, nose to the +x: a long hood, the cabin set back, a
+    // flat tail. Curves where a car has curves.
     const s = new T.Shape();
-    s.moveTo(-L / 2, 0.9);
-    s.lineTo(-L / 2 + 0.6, 0.6);
-    s.lineTo(L / 2 - 1.2, 0.5);
-    s.lineTo(L / 2, 1.3);
-    s.lineTo(L / 2 - 0.3, 2.0);
-    s.lineTo(L * 0.12, 2.4);
-    s.lineTo(-L * 0.05, 3.3);
+    s.moveTo(-L / 2, 0.95);
+    s.lineTo(-L / 2 + 0.8, 0.7);
+    s.lineTo(L / 2 - 1.6, 0.6);
+    s.quadraticCurveTo(L / 2, 0.7, L / 2, 1.4);
+    s.quadraticCurveTo(L / 2, 2.0, L / 2 - 0.6, 2.05);
+    s.quadraticCurveTo(L * 0.2, 2.35, L * 0.06, 2.6);
+    s.quadraticCurveTo(-L * 0.04, 3.45, -L * 0.14, 3.55);
     s.lineTo(-L * 0.3, 3.5);
-    s.lineTo(-L / 2 + 0.5, 2.9);
-    s.lineTo(-L / 2, 2.5);
+    s.quadraticCurveTo(-L / 2 + 0.6, 3.2, -L / 2, 2.7);
     s.closePath();
-    const body = new T.Mesh(new T.ExtrudeGeometry(s, { depth: W, bevelEnabled: true, bevelThickness: 0.35, bevelSize: 0.3, bevelSegments: 3 }), paint);
+    const body = new T.Mesh(new T.ExtrudeGeometry(s, { depth: W, bevelEnabled: true, bevelThickness: 0.4, bevelSize: 0.36, bevelSegments: 4, curveSegments: 10 }), paint);
     body.position.z = -W / 2;
     body.castShadow = true;
     body.receiveShadow = true;
     g.add(body);
+    // Wheel arches: dark discs in the flanks where the cutouts would be.
+    const archMat = new T.MeshStandardMaterial({ color: 0x0e0e0f, roughness: 1 });
+    for (const [x, z] of [[L * 0.32, W / 2], [L * 0.32, -W / 2], [-L * 0.3, W / 2], [-L * 0.3, -W / 2]]) {
+      const arch = new T.Mesh(new T.CylinderGeometry(1.55, 1.55, 0.3, 24), archMat);
+      arch.rotation.x = Math.PI / 2;
+      arch.position.set(x, 1.3, z + (z > 0 ? 0.2 : -0.2));
+      g.add(arch);
+    }
     // The cabin bubble and the single seat's canopy.
     const canopy = new T.Mesh(new T.SphereGeometry(1.9, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2), glass);
-    canopy.scale.set(1.5, 0.75, 1.0);
-    canopy.position.set(-L * 0.12, 3.3, -0.9);
+    canopy.scale.set(1.6, 0.7, 1.05);
+    canopy.position.set(-L * 0.12, 3.35, -0.9);
     canopy.castShadow = true;
     g.add(canopy);
     // Wheels.
@@ -746,7 +754,7 @@ export class Roadster {
     const thrust = this.exploded ? 0 : Math.max(0, state.thrust);
     const maxThrust = this.maxThrust || 1;
     if (thrust > 0 && alt > 0) {
-      const rate = (thrust / maxThrust) * 1400 * dt;
+      const rate = (0.3 + 0.7 * (thrust / maxThrust)) * 2400 * dt;
       const q = new T.Quaternion().setFromEuler(this.car.rotation);
       const down = new T.Vector3(0, -1, 0).applyQuaternion(q);
       for (const n of this.nozzles) {
@@ -755,8 +763,9 @@ export class Roadster {
       }
       // Dust where the gas reaches the ground, when the program raises it.
       if (state.dust !== 0 && alt < 160) {
-        const foot = new T.Vector3(this.pose.x + down.x * alt, ground, down.z * alt);
-        this.dust.emit(foot, (1 - alt / 120) * (thrust / maxThrust) * 900 * dt, scale);
+        const foot = new T.Vector3(this.pose.x + down.x * alt, this.height(this.pose.x + down.x * alt), down.z * alt);
+        const near = 1 - alt / 160;
+        this.dust.emit(foot, near * near * (thrust / maxThrust) * 1200 * dt, scale);
       }
     }
     // Attitude puffs when turning: the pair that lifts its end fires down.
@@ -941,8 +950,8 @@ class Plume {
       this.vel[i * 3 + 2] = (dir.z + sz) * speed;
       this.life[i] = 0.25 + 0.2 * Math.random();
       this.age[i] = 0;
-      this.size[i] = (0.6 + 0.6 * Math.random()) * scale;
-      this.alpha[i] = 0.9 * strength;
+      this.size[i] = (1.0 + 1.0 * Math.random()) * scale;
+      this.alpha[i] = 0.6 * strength;
     }
   }
 
@@ -960,7 +969,7 @@ class Plume {
       pos[i * 3 + 2] += vel[i * 3 + 2] * dt;
       // Gas expands and thins.
       this.size[i] *= 1 + 3.5 * dt;
-      this.alpha[i] = (1 - f) * (1 - f) * 0.9;
+      this.alpha[i] = (1 - f) * (1 - f) * 0.6;
       vel[i * 3] *= 1 - 0.8 * dt;
       vel[i * 3 + 1] *= 1 - 0.8 * dt;
       vel[i * 3 + 2] *= 1 - 0.8 * dt;
@@ -987,13 +996,14 @@ class Dust extends Plume {
     for (let k = 0; k < n; k++) {
       const i = this.next;
       this.next = (this.next + 1) % this.n;
+      // Regolith goes out more than up: a low skirt of dust.
       const ang = Math.random() * Math.PI * 2;
-      const r = (20 + 60 * Math.random()) * Math.sqrt(scale);
+      const r = (12 + 40 * Math.random()) * Math.sqrt(scale);
       this.pos[i * 3] = p.x + (Math.random() - 0.5) * 6 * scale;
-      this.pos[i * 3 + 1] = p.y + 0.5;
+      this.pos[i * 3 + 1] = p.y + 0.3;
       this.pos[i * 3 + 2] = p.z + (Math.random() - 0.5) * 6 * scale;
       this.vel[i * 3] = Math.cos(ang) * r;
-      this.vel[i * 3 + 1] = 10 + 25 * Math.random();
+      this.vel[i * 3 + 1] = 3 + 9 * Math.random();
       this.vel[i * 3 + 2] = Math.sin(ang) * r * 0.6;
       this.life[i] = 1.2 + 1.5 * Math.random();
       this.age[i] = 0;
