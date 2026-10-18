@@ -4,27 +4,119 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Moonlander</title>
-<meta name="description" content="Jack Burness's Moonlander (DEC GT40, 1973), the recovered program running in your browser, on a modelled P39 tube.">
+<meta name="description" content="Jack Burness's Moonlander (DEC GT40, 1973), the recovered program with its physics untouched, flown in a Roadster. In your browser.">
 <style>
-  :root { color-scheme: dark; }
-  html, body { margin: 0; height: 100%; background: #050605; color: #8a9a8a; font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
-  body { display: grid; grid-template-rows: 1fr auto; min-height: 100dvh; }
-  main { display: grid; place-items: center; padding: 8px; min-height: 0; }
-  #tube { display: block; touch-action: none; cursor: crosshair; background: #050605; }
-  footer { display: flex; gap: 16px; justify-content: space-between; align-items: baseline; padding: 6px 14px 10px; color: #5d6b5d; }
-  footer a { color: #7c9a7c; text-decoration: none; }
-  footer a:hover { text-decoration: underline; }
-  #status { min-width: 4em; text-align: right; font-variant-numeric: tabular-nums; }
-  @media (max-width: 640px) { footer { font-size: 11px; flex-wrap: wrap; } }
+  :root {
+    color-scheme: dark;
+    --fg: #e9e9e4; --dim: #8e8f8a; --faint: #4a4b47; --accent: #ffffff; --warn: #ff8a5c;
+    --sans: Inter, "SF Pro Text", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  html, body { margin: 0; height: 100%; background: #000; color: var(--fg); font: 14px/1.4 var(--sans); overflow: hidden; }
+  body { position: relative; min-height: 100dvh; }
+  canvas.view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  #tube { background: #050605; cursor: crosshair; }
+  #scene { background: #000; }
+  .hidden { display: none !important; }
+
+  /* The dashboard: readouts across the top, the throttle on the right. */
+  #hud { position: absolute; inset: 0; pointer-events: none; user-select: none; -webkit-user-select: none; }
+  #hud * { pointer-events: none; }
+  #readouts { position: absolute; left: max(16px, env(safe-area-inset-left)); top: max(14px, env(safe-area-inset-top)); display: flex; gap: 28px; flex-wrap: wrap; }
+  .readout { min-width: 92px; }
+  .readout .label { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); }
+  .readout .value { font-size: 22px; font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; line-height: 1.15; }
+  .readout .unit { font-size: 11px; color: var(--dim); margin-left: 3px; }
+  .readout.warn .value { color: var(--warn); }
+  #message { position: absolute; left: 50%; bottom: max(26px, calc(env(safe-area-inset-bottom) + 20px)); transform: translateX(-50%); max-width: min(90vw, 760px); text-align: center; font-size: 15px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg); text-shadow: 0 0 12px rgba(0,0,0,0.8); transition: opacity 0.4s; }
+  #message:empty { opacity: 0; }
+
+  #throttle { position: absolute; right: max(18px, env(safe-area-inset-right)); top: 50%; transform: translateY(-50%); width: 44px; height: min(46vh, 340px); pointer-events: auto; touch-action: none; cursor: ns-resize; }
+  #throttle * { pointer-events: none; }
+  #throttle .rail { position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--faint); }
+  #throttle .fill { position: absolute; left: 50%; bottom: 0; width: 2px; margin-left: -1px; background: var(--fg); height: 75%; }
+  #throttle .knob { position: absolute; left: 50%; width: 30px; height: 30px; margin-left: -15px; margin-bottom: -15px; border-radius: 50%; border: 2px solid var(--fg); background: rgba(0,0,0,0.5); bottom: 75%; display: grid; place-items: center; font-size: 10px; font-variant-numeric: tabular-nums; }
+  #throttle .ghost { position: absolute; left: 50%; width: 10px; height: 2px; margin-left: -5px; background: var(--dim); bottom: 75%; opacity: 0; }
+  #throttle .cap { position: absolute; left: 50%; transform: translateX(-50%); font-size: 10px; letter-spacing: 0.14em; color: var(--dim); text-transform: uppercase; }
+  #throttle .cap.top { top: -20px; } #throttle .cap.bottom { bottom: -22px; }
+
+  #turn { position: absolute; right: max(14px, env(safe-area-inset-right)); bottom: max(22px, calc(env(safe-area-inset-bottom) + 16px)); display: flex; gap: 6px; }
+  #turn button { pointer-events: auto; touch-action: none; width: 44px; height: 44px; border-radius: 8px; border: 1px solid var(--faint); background: rgba(0,0,0,0.45); color: var(--fg); font: 15px var(--sans); cursor: pointer; }
+  #turn button:active, #turn button.on { background: var(--fg); color: #000; }
+
+  #topright { position: absolute; right: max(16px, env(safe-area-inset-right)); top: max(14px, env(safe-area-inset-top)); display: flex; gap: 14px; align-items: baseline; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--dim); }
+  #topright button, #topright a { pointer-events: auto; background: none; border: 0; color: var(--dim); font: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; padding: 0; text-decoration: none; }
+  #topright button:hover, #topright a:hover { color: var(--fg); }
+  #status { font-variant-numeric: tabular-nums; text-transform: none; }
+
+  /* The 1973 view's own footer. */
+  #hint { position: absolute; left: 14px; right: 14px; bottom: 8px; font: 12px/1.5 var(--mono); color: #5d6b5d; pointer-events: none; }
+
+  /* About, over everything. */
+  #about { position: absolute; inset: 0; background: rgba(0,0,0,0.86); overflow: auto; padding: 48px 24px; display: grid; place-items: start center; }
+  #about article { max-width: 640px; font-size: 15px; line-height: 1.55; color: #d8d8d2; }
+  #about h1 { font-size: 20px; font-weight: 500; margin: 0 0 12px; }
+  #about h2 { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); margin: 28px 0 8px; }
+  #about a { color: var(--fg); }
+  #about p { margin: 0 0 12px; }
+  #about button { position: fixed; top: 16px; right: 20px; background: none; border: 1px solid var(--faint); color: var(--fg); font: 12px var(--sans); letter-spacing: 0.1em; text-transform: uppercase; padding: 8px 12px; border-radius: 6px; cursor: pointer; }
+  #arrival { position: absolute; inset: 0; display: grid; place-items: center; background: #000; transition: opacity 0.6s; }
+  #arrival .card { text-align: center; }
+  #arrival h1 { font-size: 13px; letter-spacing: 0.3em; text-transform: uppercase; font-weight: 500; color: var(--dim); margin: 0 0 10px; }
+  #arrival p { font-size: 16px; color: var(--fg); margin: 0; }
+  #arrival .skip { margin-top: 28px; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); }
+  @media (max-width: 640px) {
+    .readout { min-width: 72px; } .readout .value { font-size: 18px; } #readouts { gap: 16px; }
+    #message { font-size: 13px; bottom: 84px; }
+    #throttle { height: 36vh; }
+  }
 </style>
 </head>
 <body>
-<main><canvas id="tube" width="1024" height="768"></canvas></main>
-<footer>
-  <span id="hint">The mouse is the light pen: hold it on the bar for throttle, on the arrows to turn. Keys: arrows turn, Shift for the big arrows, up and down for throttle. R restarts, S copies a replay link, A hands over to the autopilot.</span>
-  <span><a href="https://github.com/mctar/ml26">source</a> · <a href="https://github.com/mctar/moonlander">the recovery</a></span>
-  <span id="status"></span>
-</footer>
+<canvas id="scene" class="view"></canvas>
+<canvas id="tube" class="view hidden" width="1024" height="768"></canvas>
+<div id="hud">
+  <div id="readouts">
+    <div class="readout"><div class="label">Altitude</div><div class="value"><span id="r-alt">0</span><span class="unit">ft</span></div></div>
+    <div class="readout"><div class="label">Distance</div><div class="value"><span id="r-dist">0</span><span class="unit">ft</span></div></div>
+    <div class="readout"><div class="label">Ver vel</div><div class="value"><span id="r-vv">0</span><span class="unit">ft/s</span></div></div>
+    <div class="readout"><div class="label">Hor vel</div><div class="value"><span id="r-hv">0</span><span class="unit">ft/s</span></div></div>
+    <div class="readout" id="r-air-box"><div class="label">Air left</div><div class="value"><span id="r-air">0</span><span class="unit">lb</span></div></div>
+  </div>
+  <div id="topright">
+    <span id="status"></span>
+    <button id="view-toggle" title="V">1973 view</button>
+    <button id="about-toggle">About</button>
+  </div>
+  <div id="throttle" title="Throttle: drag, or up and down keys">
+    <div class="cap top">100</div>
+    <div class="rail"></div><div class="fill"></div><div class="ghost"></div><div class="knob"><span id="r-pct">75</span></div>
+    <div class="cap bottom">Thrust</div>
+  </div>
+  <div id="turn">
+    <button data-turn="-2" title="Shift+Left">&#x27F8;</button>
+    <button data-turn="-1" title="Left">&#x2190;</button>
+    <button data-turn="1" title="Right">&#x2192;</button>
+    <button data-turn="2" title="Shift+Right">&#x27F9;</button>
+  </div>
+  <div id="message"></div>
+</div>
+<div id="hint" class="hidden"></div>
+<div id="arrival"><div class="card"><h1>Moonlander</h1><p>Roadster edition</p><p class="skip" id="arrival-note">Arriving from solar orbit</p></div></div>
+<div id="about" class="hidden">
+  <button id="about-close">Close</button>
+  <article>
+    <h1>Moonlander, Roadster edition</h1>
+    <p>Jack Burness wrote Moonlander in 1973 for DEC's GT40, a PDP-11 with a vector display and a light pen. This is that program: recovered, translated routine by routine into Rust, proved against the original binary step for step, and compiled to run here. The physics, the rules, the terrain, the messages and the fuel budget are his, unchanged. What you see is 2026.</p>
+    <h2>The car</h2>
+    <p>A Roadster, the one-seat kind that is meant to leave the ground, coming down on compressed air. It weighs 10,086 lb because that is the number the 1973 code divides by, and that number is an address, not a weight. Nobody has published a weight for the real one either.</p>
+    <h2>Controls</h2>
+    <p>Drag the thrust bar, or use the up and down keys. The arrows turn; Shift makes them the big arrows. Under the hood every one of these moves a light pen onto the controls Burness drew, and the program reads nothing but the pen. V shows the 1973 tube. R starts again. S copies a link that replays this flight exactly.</p>
+    <h2>Sources</h2>
+    <p><a href="https://github.com/mctar/moonlander">The recovery</a>, with the hardware model and the journal. <a href="https://github.com/mctar/ml26">This site's source</a>. The car and the diner are drawn from public photographs and carry no marks; nothing here is affiliated with or endorsed by anyone who makes cars. The quotations are on the record: the unveil of 15 October 2026 as reported by TechCrunch and Euronews, the 2018 launch as recorded on Wikipedia.</p>
+    <p>MIT licence. Moonlander is Jack Burness's work.</p>
+  </article>
+</div>
 <script type="module" src="./main.js"></script>
 </body>
 </html>
