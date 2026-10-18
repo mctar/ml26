@@ -47,12 +47,17 @@ export class Sound {
     src.start();
   }
 
+  /** While the radio talks, the thrusters come down. */
+  duck(on) {
+    this.ducked = on;
+  }
+
   /** Each frame: the thrust fraction 0..1, and the state for one-shots. */
   update(thrustFrac, state, dt) {
     if (!this.ac) return;
     const t = this.ac.currentTime;
     // The gas: level with thrust, a little body at the bottom.
-    const target = thrustFrac > 0 ? 0.04 + 0.22 * Math.sqrt(thrustFrac) : 0;
+    const target = (thrustFrac > 0 ? 0.04 + 0.22 * Math.sqrt(thrustFrac) : 0) * (this.ducked ? 0.45 : 1);
     this.hiss.gain.setTargetAtTime(target, t, 0.08);
     if (state.fuel_low && !this.lowAir) this.chime();
     this.lowAir = !!state.fuel_low;

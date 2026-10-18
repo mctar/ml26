@@ -5,6 +5,7 @@ import { Engine, messageName, MESSAGES } from './engine/engine.js';
 import { Phosphor } from './phosphor.js';
 import { Roadster } from './roadster.js';
 import { Sound } from './sound.js';
+import { Radio } from './radio.js';
 
 const $ = (id) => document.getElementById(id);
 const tube = $('tube');
@@ -49,6 +50,7 @@ class Page {
     this.takenAt = 0;
     this.frames = 0;
     this.sound = new Sound();
+    this.radio = new Radio(this.sound);
     this.state = null;
     this.prev = null;
     this.lastMessage = undefined;
@@ -104,8 +106,9 @@ class Page {
     this.tMachine += t0 - (this.tResume || t0);
     await new Promise((r) => requestAnimationFrame(r));
     const t1 = performance.now();
-    // The greeting runs fast behind the arrival card; the game at its pace.
-    const wanted = this.greeting() ? this.fastRate : this.userRate;
+    // The greeting runs fast behind the arrival card; then the machine
+    // holds until the card is dismissed; then the game at its pace.
+    const wanted = this.greeting() ? this.fastRate : this.arrival ? 0 : this.userRate;
     if (wanted !== this.rate) {
       this.originT = this.wallMachine();
       this.originWall = t1;
@@ -132,7 +135,7 @@ class Page {
     this.lastFrame = now;
     this.frames++;
     if (this.arrival) this.orbit(now);
-    if (this.arrival && this.state && this.state.t >= GAME_START && now - this.arrivalSince > 3600) this.landed();
+    if (this.arrival && this.state && this.state.t >= GAME_START && now - this.arrivalSince > 3600 && this.sound.ac) this.landed();
     if (!this.roadster.terrain && this.engine.game) {
       this.roadster.load(this.engine.symbols, (a) => this.engine.peek(a));
       this.roadster.maxThrust = this.engine.symbols.MAXTRS;
@@ -153,6 +156,8 @@ class Page {
     const car = $('car'), earth = $('earth'), mars = $('mars');
     if (!car) return;
     const s = (now - this.arrivalSince) / 1000;
+    // Sound needs a gesture; after the orbit has played, ask for one.
+    if (s > 3 && !this.sound.ac && !this.replay) $('arrival-note').textContent = 'Tap or press a key to begin';
     // Years pass quickly: the Roadster's 1.525-year period, Earth's one,
     // Mars's 1.88, from the launch geometry (roughly: Earth at the car).
     const yrs = s * 1.6;
@@ -168,12 +173,18 @@ class Page {
     mars.setAttribute('cy', (-106.7 * Math.sin(tm)).toFixed(2));
   }
 
-  /** The arrival card comes down and the game is on. */
+  /** The arrival card comes down and the game is on; the first time, the
+   * controller reads the brief over the radio. */
   landed() {
     this.arrival = false;
     const a = $('arrival');
     a.style.opacity = '0';
     setTimeout(() => a.classList.add('hidden'), 650);
+    if (!this.briefed && !this.replay) {
+      this.briefed = true;
+      this.radio.say('BRIEF');
+    }
+    this.radio.preload(Object.keys(MESSAGES_2026).concat(['AIRLOW']));
   }
 
   fitTube() {
@@ -230,7 +241,13 @@ class Page {
     if (m !== this.lastMessage) {
       this.lastMessage = m;
       $('message').textContent = m ? MESSAGES_2026[m] : '';
+      if (m && !this.arrival) this.radio.say(m, { urgent: ['DEADM', 'MACDED', 'ROCKMS', 'OLDMS', 'OLDTLT', 'ANGLEJ'].includes(m) });
     }
+    if (s.fuel_low && !this.airLowSaid) {
+      this.airLowSaid = true;
+      if (!this.arrival) this.radio.say('AIRLOW');
+    }
+    if (!s.fuel_low) this.airLowSaid = false;
     if (this.frames % 15 === 0) {
       const secs = (s.t / 1e6).toFixed(0);
       if (this.debug) {
@@ -430,6 +447,7 @@ class Page {
     $('about-toggle').addEventListener('click', () => $('about').classList.remove('hidden'));
     $('about-close').addEventListener('click', () => $('about').classList.add('hidden'));
     $('arrival').addEventListener('click', () => this.wake());
+    $('arrival').addEventListener('touchend', () => this.wake(), { passive: true });
 
     this.held = new Set();
     window.addEventListener('keydown', (ev) => {

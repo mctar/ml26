@@ -531,7 +531,7 @@ fn symbols() -> String {
     sym!(
         N2FAST, GREATM, GOODM, ROUGHM, CRIPM, DEADM, ANGLEM, ANGLEJ, SIDEM, BUMPYM, ROCKMS, OLDMS, FLAGMS, OLDTLT,
         MACDED, ORDER, MANMSG, LFTMSG, RGTMSG, TOPMSG, VFAST, FAST, TERAIN, FEATUR, MOONST, MOONEN, MINTRS, MAXTRS,
-        YTHRST, G1, G2, DISTOP, ITEMY1, ITEMY2, DX1, DY1
+        YTHRST, G1, G2, DISTOP, ITEMY1, ITEMY2, DX1, DY1, MAN, MACX, MACY
     );
     s.push_str(&format!("LINE_HZ={LINE_HZ}\nBEAM_WORDS={BEAM_WORDS}\n"));
     s.push_str(&format!("STATE_SIZE={}\nINPUT_SIZE={}\n", std::mem::size_of::<State>(), std::mem::size_of::<Input>()));

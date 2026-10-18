@@ -8,11 +8,14 @@
 // table exactly, and falls away into invented hills behind and in front.
 
 import * as T from './vendor/three.js';
+import { Astronaut } from './astronaut.js';
 
 const TERRAIN_N = 911;          // words in TERAIN
 const TERRAIN_X0 = -22400;      // feet at index 0
 const TERRAIN_DX = 32;          // feet per index
 const CAR_LENGTH = 15;          // feet, a Roadster
+const CAR_WIDTH = 6.8;
+const SEAT_Z = 0.9;             // the single seat, on the camera's side
 const FT = 1;
 
 /** Burness's lander, from the DESIGN table: moves (M) and lines (L) in
@@ -87,50 +90,15 @@ export class Roadster {
     this.exploded = false;
     this.debris = null;
     this.composer = null;
-    this.driver = this.buildDriver();
-    this.driver.visible = false;
-    this.scene.add(this.driver);
+    // The driver outside the car; the one inside is part of the car.
+    this.walker = new Astronaut();
+    this.walker.group.visible = false;
+    this.scene.add(this.walker.group);
+    this.out = null; // the driver's doings outside: see driverUpdate
     this.flag = this.buildFlag();
     this.flag.visible = false;
     this.scene.add(this.flag);
     this.setupPost();
-  }
-
-  /** The driver: a figure in a white suit and a dark visor, a little
-   * stiff, as the man in the original walks. */
-  buildDriver() {
-    const g = new T.Group();
-    const suit = new T.MeshStandardMaterial({ color: 0xf4f4f0, roughness: 0.8 });
-    const visor = new T.MeshPhysicalMaterial({ color: 0x0c0c10, roughness: 0.1, metalness: 0.7 });
-    const torso = new T.Mesh(new T.CapsuleGeometry(0.55, 1.4, 4, 10), suit);
-    torso.position.y = 3.2;
-    const helmet = new T.Mesh(new T.SphereGeometry(0.62, 16, 12), suit);
-    helmet.position.y = 4.9;
-    const face = new T.Mesh(new T.SphereGeometry(0.5, 16, 12, 0, Math.PI), visor);
-    face.position.set(0.2, 4.9, 0);
-    face.rotation.y = -Math.PI / 2;
-    const pack = new T.Mesh(new T.BoxGeometry(0.6, 1.3, 0.9), suit);
-    pack.position.set(-0.6, 3.4, 0);
-    g.add(torso, helmet, face, pack);
-    this.legs = [];
-    for (const z of [-0.3, 0.3]) {
-      const leg = new T.Mesh(new T.CapsuleGeometry(0.22, 1.6, 4, 8), suit);
-      leg.position.set(0, 2.2, z);
-      leg.geometry.translate(0, -0.8, 0);
-      leg.position.y = 2.6;
-      g.add(leg);
-      this.legs.push(leg);
-    }
-    this.arms = [];
-    for (const z of [-0.75, 0.75]) {
-      const arm = new T.Mesh(new T.CapsuleGeometry(0.18, 1.3, 4, 8), suit);
-      arm.geometry.translate(0, -0.65, 0);
-      arm.position.set(0, 4.0, z);
-      g.add(arm);
-      this.arms.push(arm);
-    }
-    g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
-    return g;
   }
 
   buildFlag() {
@@ -518,7 +486,7 @@ export class Roadster {
     const glass = new T.MeshPhysicalMaterial({ color: 0x1a2430, roughness: 0.1, metalness: 0.6, transparent: true, opacity: 0.85 });
     const rubber = new T.MeshStandardMaterial({ color: 0x151515, roughness: 0.9 });
     const rim = new T.MeshStandardMaterial({ color: 0x9a9a9a, roughness: 0.3, metalness: 0.9 });
-    const L = CAR_LENGTH, W = 6.8;
+    const L = CAR_LENGTH, W = CAR_WIDTH;
     // Side profile, nose to the +x: a long hood, the cabin set back, a
     // flat tail. Curves where a car has curves.
     const s = new T.Shape();
@@ -546,11 +514,16 @@ export class Roadster {
       g.add(arch);
     }
     // The cabin bubble and the single seat's canopy.
+    // The canopy, hinged at its front edge so it can open.
+    const hinge = new T.Group();
+    hinge.position.set(-L * 0.12 + 3.0, 3.3, SEAT_Z);
     const canopy = new T.Mesh(new T.SphereGeometry(1.9, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2), glass);
     canopy.scale.set(1.6, 0.7, 1.05);
-    canopy.position.set(-L * 0.12, 3.35, -0.9);
+    canopy.position.set(-3.0, 0.05, 0);
     canopy.castShadow = true;
-    g.add(canopy);
+    hinge.add(canopy);
+    g.add(hinge);
+    if (kind === 'live') this.canopy = hinge;
     // Wheels.
     const wheels = [];
     for (const [x, z] of [[L * 0.32, W / 2], [L * 0.32, -W / 2], [-L * 0.3, W / 2], [-L * 0.3, -W / 2]]) {
@@ -596,28 +569,15 @@ export class Roadster {
       tail.position.set(-L / 2 - 0.1, 2.2, 0);
       g.add(tail);
     }
-    // The driver, seated: head and shoulders under the canopy, the left
-    // arm out on the sill, as in the photographs from 2018.
+    // The driver, seated under the canopy, the arm toward the camera out
+    // on the sill, as in the photographs from 2018.
     if (kind === 'live') {
-      const suit = new T.MeshStandardMaterial({ color: 0xf4f4f0, roughness: 0.8 });
-      const visor = new T.MeshPhysicalMaterial({ color: 0x0c0c10, roughness: 0.1, metalness: 0.7 });
-      const seated = new T.Group();
-      const torso = new T.Mesh(new T.CapsuleGeometry(0.5, 0.9, 4, 10), suit);
-      torso.position.set(-L * 0.12, 2.7, -0.9);
-      const helmet = new T.Mesh(new T.SphereGeometry(0.55, 16, 12), suit);
-      helmet.position.set(-L * 0.12, 3.75, -0.9);
-      const face = new T.Mesh(new T.SphereGeometry(0.45, 16, 12, 0, Math.PI), visor);
-      face.position.set(-L * 0.12 + 0.18, 3.75, -0.9);
-      face.rotation.y = -Math.PI / 2;
-      const arm = new T.Mesh(new T.CapsuleGeometry(0.16, 1.1, 4, 8), suit);
-      arm.position.set(-L * 0.12 + 0.3, 2.75, -W / 2 - 0.1);
-      arm.rotation.z = Math.PI / 2;
-      const forearm = new T.Mesh(new T.CapsuleGeometry(0.15, 0.9, 4, 8), suit);
-      forearm.position.set(-L * 0.12 + 0.9, 2.95, -W / 2 - 0.2);
-      forearm.rotation.z = Math.PI / 2 - 0.5;
-      seated.add(torso, helmet, face, arm, forearm);
-      g.add(seated);
-      this.seated = seated;
+      const rider = new Astronaut();
+      rider.group.position.set(-L * 0.12 - 0.3, 0.75, SEAT_Z);
+      rider.group.scale.setScalar(0.92);
+      rider.update(0, 'seated');
+      g.add(rider.group);
+      this.rider = rider;
       this.wheels = wheels;
       this.nozzles = nozzles;
       this.corners = corners;
@@ -794,28 +754,7 @@ export class Roadster {
     // The diner, if the program says it has been destroyed.
     if (this.diner) this.dinerStands(!!(state.diner & 1));
 
-    // The driver: the program's man, at the program's position (MANX is
-    // raster units from the close-up's left edge, two thirds of a foot
-    // each). He appears when he starts to move and goes when the game does.
-    if (this.lastManx !== undefined && state.manx !== this.lastManx && state.lefeet !== 0 && state.verdis < 450) this.walking = true;
-    this.lastManx = state.manx;
-    if (state.verdis > 20000 || this.exploded) this.walking = false;
-    this.driver.visible = !!this.walking;
-    if (this.seated) this.seated.visible = !this.walking;
-    if (this.walking) {
-      const mx = state.lefeet + (state.manx * 2) / 3;
-      const my = this.height(mx);
-      const moving = Math.abs(mx - (this.driverX ?? mx)) > 0.01;
-      this.driverX = mx;
-      this.driver.position.set(mx, my, 0);
-      this.driver.rotation.y = 0;
-      if (moving) this.stride = (this.stride || 0) + dt * 9;
-      const sw = moving ? Math.sin(this.stride) * 0.6 : 0;
-      this.legs[0].rotation.z = sw;
-      this.legs[1].rotation.z = -sw;
-      this.arms[0].rotation.z = -sw * 0.7;
-      this.arms[1].rotation.z = sw * 0.7;
-    }
+    this.driverUpdate(state, now, dt);
     // The flag he plants, where the program puts it.
     const flagUp = state.flagx !== 0 && state.verdis < 450 && !this.exploded;
     this.flag.visible = flagUp;
@@ -862,6 +801,146 @@ export class Roadster {
   }
 
   /** A new game: the car is whole again. */
+  /**
+   * The driver, outside the car. The program shows its man by pointing
+   * DUSTON at the MAN display list; MANX is his position in raster units
+   * from the close-up's left edge, two thirds of a foot each. Around that
+   * we add what the display could not: the canopy opening, the climb out,
+   * a lope in a sixth of a g, a wave at the counter, the flag planted and
+   * saluted, and the climb back in before the car leaves.
+   */
+  driverUpdate(state, now, dt) {
+    const shown = state.dust === this.symbols.MAN && state.verdis < 450 && !this.exploded;
+    const mx = state.lefeet + (state.manx * 2) / 3;
+    const w = this.walker;
+    const o = this.out;
+    const carX = this.pose.x;
+    const seatWorld = () => {
+      const v = new T.Vector3();
+      this.rider.group.getWorldPosition(v);
+      return v;
+    };
+    if (shown && !o) {
+      // He appears: the canopy opens and he climbs out, toward the camera.
+      this.out = { phase: 'climb', t: 0, x: mx, lastX: mx, speed: 0, idleSince: now, waved: false, saluted: false, plantAt: 0 };
+      w.group.visible = true;
+      w.face(1);
+    }
+    if (!shown && o && o.phase !== 'in' && o.phase !== 'done') {
+      // The program has taken him back into the ship (or the game ended).
+      if (Math.abs(o.x - carX) < 12 && state.verdis < 450) {
+        o.phase = 'in';
+        o.t = 0;
+      } else {
+        this.out = null;
+        w.group.visible = false;
+      }
+    }
+    if (!this.out) {
+      if (this.rider) this.rider.group.visible = true;
+      if (this.canopy) this.canopy.rotation.z = T.MathUtils.lerp(this.canopy.rotation.z, 0, 1 - Math.exp(-dt / 0.25));
+      this.walking = false;
+      return;
+    }
+    const d = this.out;
+    const ground = (x) => this.height(x);
+    const WALK_Z = CAR_WIDTH / 2 + 1.8;
+    if (d.phase === 'climb') {
+      d.t = Math.min(1, d.t + dt / 1.6);
+      this.rider.group.visible = false;
+      this.canopy.rotation.z = -1.05 * T.MathUtils.smoothstep(d.t, 0, 0.3);
+      const seat = seatWorld();
+      const k = T.MathUtils.smoothstep(d.t, 0.35, 1);
+      const px = T.MathUtils.lerp(seat.x, carX - 1.0, k);
+      const pz = T.MathUtils.lerp(seat.z, WALK_Z, k);
+      const py = T.MathUtils.lerp(seat.y - 0.75, ground(px), T.MathUtils.smoothstep(d.t, 0.55, 1));
+      w.group.position.set(px, py, pz);
+      w.update(dt, 'climb', d.t);
+      d.x = px;
+      if (d.t >= 1) {
+        d.phase = 'walk';
+        d.idleSince = now;
+      }
+      this.walking = true;
+      this.driverX = d.x;
+      return;
+    }
+    if (d.phase === 'in') {
+      // Back into the seat: the climb in reverse, canopy closing after.
+      d.t = Math.min(1, d.t + dt / 1.4);
+      const seat = seatWorld();
+      const k = T.MathUtils.smoothstep(1 - d.t, 0.35, 1);
+      const px = T.MathUtils.lerp(seat.x, carX - 1.0, k);
+      const pz = T.MathUtils.lerp(seat.z, WALK_Z, k);
+      const py = T.MathUtils.lerp(seat.y - 0.75, ground(px), T.MathUtils.smoothstep(1 - d.t, 0.55, 1));
+      w.group.position.set(px, py, pz);
+      w.update(dt, 'climb', 1 - d.t);
+      this.canopy.rotation.z = -1.05 * (1 - T.MathUtils.smoothstep(d.t, 0.75, 1));
+      if (d.t >= 1) {
+        d.phase = 'done';
+        w.group.visible = false;
+        this.rider.group.visible = true;
+        this.rider.update(0, 'seated');
+      }
+      this.walking = true;
+      this.driverX = d.x;
+      return;
+    }
+    if (d.phase === 'done') {
+      this.rider.group.visible = true;
+      this.canopy.rotation.z = T.MathUtils.lerp(this.canopy.rotation.z, 0, 1 - Math.exp(-dt / 0.25));
+      if (!shown && state.verdis > 450) this.out = null;
+      this.walking = false;
+      return;
+    }
+    // Walking, at the program's position, smoothed.
+    const target = mx;
+    const kx = 1 - Math.exp(-dt / 0.12);
+    const nx = d.x + (target - d.x) * kx;
+    const vx = (nx - d.x) / Math.max(1e-3, dt);
+    d.speed = d.speed + (vx - d.speed) * (1 - Math.exp(-dt / 0.15));
+    d.x = nx;
+    const moving = Math.abs(d.speed) > 0.8;
+    if (moving) {
+      w.face(Math.sign(d.speed));
+      d.idleSince = now;
+    }
+    w.group.position.set(d.x, ground(d.x), WALK_Z);
+    // What he is doing: at the counter he waves; by a fresh flag he plants
+    // and salutes; otherwise he lopes or stands.
+    const order = this.messageIs(state, 'ORDER');
+    const flagFresh = state.flagx !== 0 && d.plantAt === 0;
+    if (flagFresh) d.plantAt = now;
+    const sincePlant = d.plantAt ? (now - d.plantAt) / 1000 : -1;
+    if (moving) {
+      w.update(dt, 'walk', d.speed);
+    } else if (sincePlant >= 0 && sincePlant < 1.2) {
+      w.face(1);
+      w.update(dt, 'plant', sincePlant / 1.0);
+    } else if (sincePlant >= 1.2 && sincePlant < 4.5) {
+      w.face(1);
+      w.update(dt, 'salute');
+    } else if (order && !moving) {
+      w.update(dt, 'wave');
+    } else {
+      w.update(dt, 'idle');
+    }
+    // When he comes back to the car, start the climb before the program
+    // hides him, so the two happen together.
+    if (d.phase === 'walk' && d.cameBack === undefined && Math.abs(d.x - carX) > 20) d.cameBack = false;
+    if (d.phase === 'walk' && d.cameBack === false && Math.abs(d.x - carX) < 3.5 && !moving) {
+      d.phase = 'in';
+      d.t = 0;
+    }
+    this.walking = true;
+    this.driverX = d.x;
+  }
+
+  /** Whether the program's message pointer names this message. */
+  messageIs(state, name) {
+    return state.sysmes !== 0 && this.symbols[name] === state.sysmes;
+  }
+
   /** The terrain as the program has it now: a crash digs a crater. */
   rereadTerrain() {
     if (!this.peek) return;
@@ -887,8 +966,11 @@ export class Roadster {
     this.exploded = false;
     this.shipSeen = false;
     this.walking = false;
-    this.lastManx = undefined;
     this.driverX = undefined;
+    this.out = null;
+    if (this.walker) this.walker.group.visible = false;
+    if (this.rider) this.rider.group.visible = true;
+    if (this.canopy) this.canopy.rotation.z = 0;
     if (this.debris) {
       this.debris.dispose();
       this.debris = null;
