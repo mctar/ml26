@@ -25,6 +25,10 @@ Live at [moonlander.btrbot.com](https://moonlander.btrbot.com).
   machine against the clock, keeps the two views, and turns the controls
   into the pen. `vendor/three.js` is a bundled subset of three.js, built
   from `vendor/three-entry.js` with esbuild.
+- `web/astronaut.js`: the driver, a jointed figure posed in code (seated,
+  climbing, loping, waving, planting, saluting); `web/radio.js` plays the
+  spoken messages in `web/radio/`, made by `tools/radio/make.sh` from
+  `tools/radio/lines.json` with pocket-tts and ffmpeg.
 - `build.sh`: Rust to wasm32, then `wasm-opt --asyncify`.
 - `.github/workflows/pages.yml`: tests, builds and publishes the site.
 

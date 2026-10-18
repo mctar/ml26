@@ -326,14 +326,14 @@ export class Roadster {
     // A lightly smoothed profile for the slopes, so each 32-foot column
     // does not become its own ribbon; the crest itself stays exact.
     let h1 = 0;
-    for (let k = -2; k <= 2; k++) h1 += this.height(x + k * 32);
-    h1 /= 5;
+    for (let k = -3; k <= 3; k++) h1 += this.height(x + k * 32);
+    h1 /= 7;
     if (z > 0) {
       // The front slopes: a face proportional to the height, down to a
       // floor with a little grain, never above the crest.
       const w = Math.min(1, d / 1400);
       const w2 = w * w * (3 - 2 * w);
-      const ws = Math.min(1, d / 300);
+      const ws = Math.min(1, d / 400);
       const base = h0 * (1 - ws) + h1 * ws;
       const far = Math.min(1, Math.max(0, d - 1400) / 20000);
       const floor = Math.min(base, h1 * 0.15) - 40 + (fbm(x / 420, z / 420 + 7.7) - 0.5) * 60 * w + (fbm(x / 6000 + 1.3, z / 6000) - 0.5) * 1200 * far;
