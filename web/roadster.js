@@ -87,6 +87,9 @@ export class Roadster {
     this.scene.add(this.car);
     this.plume = new Plume(this.scene, 3000);
     this.dust = new Dust(this.scene, 1500);
+    this.smoke = new Dust(this.scene, 600);
+    this.smoke.material.uniforms.color.value = new T.Color(0.12, 0.11, 0.1);
+    this.squat = null;
     this.exploded = false;
     this.debris = null;
     this.composer = null;
@@ -150,6 +153,9 @@ export class Roadster {
     // Earthshine and the ground's bounce: faint, bluish from above, warm
     // grey from below.
     this.scene.add(new T.HemisphereLight(0x3a4457, 0x3a3430, 0.9));
+    // A light for the moment of a crash.
+    this.flash = new T.PointLight(0xfff0d0, 0, 400, 1.5);
+    this.scene.add(this.flash);
   }
 
   sky() {
@@ -176,13 +182,38 @@ export class Roadster {
     const m = new T.PointsMaterial({ size: 2.2, sizeAttenuation: false, vertexColors: true, transparent: true, opacity: 0.9, depthWrite: false });
     this.stars = new T.Points(g, m);
     this.scene.add(this.stars);
-    // The Earth, small and far, where it was for Apollo: high and to one side.
-    const earth = new T.Mesh(new T.SphereGeometry(1800, 48, 32), new T.MeshStandardMaterial({ color: 0x3b6fd6, roughness: 1, emissive: 0x0a1a3a, emissiveIntensity: 0.6 }));
-    earth.position.set(60000, 70000, -110000);
+    // The Earth, far and high to the left, with continents and cloud from
+    // noise; it is lit by the same sun as the ground.
+    const c = document.createElement('canvas');
+    c.width = 512;
+    c.height = 256;
+    const ctx = c.getContext('2d');
+    const img = ctx.createImageData(512, 256);
+    const nz = (x, y) => noise(x, y);
+    for (let y = 0; y < 256; y++) {
+      for (let x = 0; x < 512; x++) {
+        const u = x / 512, v = y / 256;
+        const land = fbm(u * 9 + 2.3, v * 5 + 1.1) + 0.35 * fbm(u * 27, v * 15) - 0.78 + 0.18 * Math.abs(v - 0.5);
+        const ice = Math.abs(v - 0.5) > 0.44;
+        let r, g, b;
+        if (ice) { r = 235; g = 240; b = 245; }
+        else if (land > 0) { const t = Math.min(1, land * 6); r = 110 + 40 * t; g = 100 + 30 * t; b = 60 + 20 * t; }
+        else { r = 30; g = 70; b = 150; }
+        const cloud = Math.max(0, fbm(u * 14 + 7.7, v * 8 + 3.3) - 0.55) * 2.6;
+        r = r + (245 - r) * cloud; g = g + (245 - g) * cloud; b = b + (248 - b) * cloud;
+        const i = (y * 512 + x) * 4;
+        img.data[i] = r; img.data[i + 1] = g; img.data[i + 2] = b; img.data[i + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    void nz;
+    const tex = new T.CanvasTexture(c);
+    tex.colorSpace = T.SRGBColorSpace;
+    const earth = new T.Mesh(new T.SphereGeometry(2600, 64, 48), new T.MeshStandardMaterial({ map: tex, roughness: 0.9, metalness: 0.0, emissive: 0x060a14, emissiveIntensity: 1 }));
+    earth.position.set(-42000, 52000, -118000);
+    earth.rotation.y = 1.2;
     this.scene.add(earth);
-    const cloud = new T.Mesh(new T.SphereGeometry(1830, 48, 32), new T.MeshStandardMaterial({ color: 0xffffff, roughness: 1, transparent: true, opacity: 0.45 }));
-    cloud.position.copy(earth.position);
-    this.scene.add(cloud);
+    this.earth = earth;
   }
 
   /** Read the terrain and the features out of the original's memory. */
@@ -348,13 +379,56 @@ export class Roadster {
     g.setAttribute('uv', new T.BufferAttribute(uv, 2));
     g.setIndex(idx);
     this.groundGeometry = g;
-    const mat = new T.MeshStandardMaterial({ color: 0x8d8a84, roughness: 0.98, metalness: 0.0, flatShading: false });
-    // Regolith: a little grain in the colour, by position.
+    const mat = new T.MeshStandardMaterial({ color: 0x8a8884, roughness: 0.96, metalness: 0.0, flatShading: false });
+    // Regolith: grain in the colour, and relief in the normal, from noise
+    // in world space: fine grit, a coarser roll, and shallow craters with
+    // rims. All of it fades with distance so it never shimmers.
     mat.onBeforeCompile = (sh) => {
-      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vW;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvW = (modelMatrix * vec4(position, 1.0)).xyz;');
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vW;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvW = (modelMatrix * vec4(position, 1.0)).xyz;');
       sh.fragmentShader = sh.fragmentShader
-        .replace('#include <common>', '#include <common>\nvarying vec3 vW;\nfloat h21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }')
-        .replace('#include <color_fragment>', '#include <color_fragment>\n{ float g = h21(floor(vW.xz * 3.0)) * 0.3 + h21(floor(vW.xz * 0.6)) * 0.4 + h21(floor(vW.xz * 0.07)) * 0.3; diffuseColor.rgb *= 0.88 + 0.24 * g; }');
+        .replace('#include <common>', `#include <common>
+varying vec3 vW;
+float h21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  float a = h21(i), b = h21(i + vec2(1.0, 0.0)), c = h21(i + vec2(0.0, 1.0)), d = h21(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y); }
+// Craters on two grids: a dent with a raised rim, a few per cell.
+float crater(vec2 p, float cell, float rmin, float rmax){
+  vec2 i = floor(p / cell), f = fract(p / cell);
+  float h = 0.0;
+  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+    vec2 g = vec2(float(x), float(y));
+    vec2 c = i + g; float r1 = h21(c), r2 = h21(c + 17.3), r3 = h21(c + 41.7);
+    if (r3 > 0.55) continue;
+    vec2 centre = g + vec2(r1, r2) * 0.8 + 0.1;
+    float rad = mix(rmin, rmax, h21(c + 5.5)) / cell;
+    float d = length(f - centre) / rad;
+    if (d < 1.4) { float bowl = -(1.0 - d * d) * 0.5; float rim = exp(-pow((d - 1.0) * 4.0, 2.0)) * 0.35; h += (d < 1.0 ? bowl : 0.0) + rim; }
+  }
+  return h;
+}
+float relief(vec2 p){
+  return vnoise(p * 1.7) * 0.06 + vnoise(p * 0.45 + 3.1) * 0.25 + vnoise(p * 0.09 + 9.2) * 1.2
+       + crater(p, 60.0, 5.0, 14.0) * 2.2 + crater(p + 1000.0, 300.0, 25.0, 70.0) * 6.0;
+}`)
+        .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+{
+  float dist = length(vViewPosition);
+  float k = (1.0 - smoothstep(600.0, 6000.0, dist)) * 0.9;
+  if (k > 0.001) {
+    vec2 p = vW.xz; float e = 0.4;
+    float h0 = relief(p);
+    float hx = relief(p + vec2(e, 0.0)) - h0;
+    float hz = relief(p + vec2(0.0, e)) - h0;
+    vec3 n = normalize(vec3(-hx / e, 1.0, -hz / e));
+    // World-space perturbation folded into the view-space normal.
+    vec3 nv = normalize((viewMatrix * vec4(n, 0.0)).xyz);
+    normal = normalize(mix(normal, normalize(normal + (nv - normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz))), k));
+  }
+}`)
+        .replace('#include <color_fragment>', '#include <color_fragment>\n{ float g = h21(floor(vW.xz * 3.0)) * 0.25 + vnoise(vW.xz * 0.12) * 0.45 + vnoise(vW.xz * 0.012 + 4.0) * 0.3; diffuseColor.rgb *= 0.84 + 0.3 * g; }');
     };
     const mesh = new T.Mesh(g, mat);
     mesh.receiveShadow = true;
@@ -369,7 +443,36 @@ export class Roadster {
     const lm = new T.LineBasicMaterial({ color: new T.Color(0.35, 1.0, 0.45), transparent: true, opacity: 0.55, blending: T.AdditiveBlending, depthWrite: false });
     this.trace = new T.Line(lg, lm);
     this.scene.add(this.trace);
+    // Loose rocks along the way, a few thousand, instanced.
+    const n = 2600;
+    const rockGeo = new T.DodecahedronGeometry(1, 0);
+    const rockMat = new T.MeshStandardMaterial({ color: 0x77736e, roughness: 1, flatShading: true });
+    this.pebbles = new T.InstancedMesh(rockGeo, rockMat, n);
+    this.pebbles.castShadow = true;
+    this.pebbles.receiveShadow = true;
+    this.pebbleAt = [];
+    for (let i = 0; i < n; i++) {
+      const x = TERRAIN_X0 + hash(i, 11) * (TERRAIN_N - 1) * TERRAIN_DX;
+      const z = (hash(i, 12) - 0.5) * 2 * (hash(i, 13) < 0.6 ? 90 : 500) + 10;
+      const sz = 0.4 + 3.2 * Math.pow(hash(i, 14), 3);
+      this.pebbleAt.push([x, z, sz, hash(i, 15) * 6.28, 0.6 + 0.8 * hash(i, 16), 0.5 + 0.6 * hash(i, 17)]);
+    }
+    this.scene.add(this.pebbles);
     this.fillTerrain();
+  }
+
+  placePebbles() {
+    const m = new T.Matrix4(), q = new T.Quaternion(), e = new T.Euler(), p = new T.Vector3(), sc = new T.Vector3();
+    for (let i = 0; i < this.pebbleAt.length; i++) {
+      const [x, z, sz, rot, sx, sy] = this.pebbleAt[i];
+      p.set(x, this.heightAt(x, z) + sz * 0.25, z);
+      e.set(0, rot, 0);
+      q.setFromEuler(e);
+      sc.set(sz * sx, sz * sy, sz);
+      m.compose(p, q, sc);
+      this.pebbles.setMatrixAt(i, m);
+    }
+    this.pebbles.instanceMatrix.needsUpdate = true;
   }
 
   /** Heights into the terrain mesh and the trace, at the current scale. */
@@ -397,6 +500,7 @@ export class Roadster {
     }
     this.traceGeometry.attributes.position.needsUpdate = true;
     this.traceGeometry.computeBoundingSphere();
+    if (this.pebbles) this.placePebbles();
   }
 
   buildFeatures() {
@@ -431,47 +535,69 @@ export class Roadster {
     for (const [o, x, lift] of this.placed) o.position.set(x, this.height(x) + lift, 0);
   }
 
-  /** A drive-in diner, first version: a low building with two screens. */
+  /** A drive-in diner: a glass box under a wide flat roof, a lit interior,
+   * a wing over the charging stalls, two big screens on posts angled at
+   * the lot, a plain round sign, and the first customer at the end stall. */
   buildDiner() {
     const g = new T.Group();
-    const white = new T.MeshStandardMaterial({ color: 0xe8e4dc, roughness: 0.6, metalness: 0.1 });
+    const white = new T.MeshStandardMaterial({ color: 0xece9e2, roughness: 0.55, metalness: 0.05 });
+    const concrete = new T.MeshStandardMaterial({ color: 0x9a9792, roughness: 0.95 });
     const dark = new T.MeshStandardMaterial({ color: 0x1a1a1c, roughness: 0.5, metalness: 0.4 });
-    const body = new T.Mesh(new T.BoxGeometry(60, 14, 36), white);
-    body.position.set(0, 7, -10);
-    body.castShadow = body.receiveShadow = true;
-    g.add(body);
-    const roof = new T.Mesh(new T.CylinderGeometry(22, 22, 70, 24, 1, false, 0, Math.PI), white);
-    roof.rotation.z = Math.PI / 2;
-    roof.rotation.y = Math.PI / 2;
-    roof.position.set(0, 14, -10);
-    roof.scale.set(0.5, 1, 1);
-    roof.castShadow = true;
-    g.add(roof);
-    // Two big screens, the films for the cars parked below.
+    const glass = new T.MeshPhysicalMaterial({ color: 0x141a22, roughness: 0.06, metalness: 0.6, transparent: true, opacity: 0.78 });
+    const warm = new T.MeshBasicMaterial({ color: 0xc9a470 });
+    const add = (mesh, x, y, z, shadow = true) => {
+      mesh.position.set(x, y, z);
+      mesh.castShadow = shadow;
+      mesh.receiveShadow = true;
+      g.add(mesh);
+      return mesh;
+    };
+    add(new T.Mesh(new T.BoxGeometry(110, 1.4, 70), concrete), 0, 0.7, -2, false);
+    // The building: lit inside, glass outside, mullions across the front.
+    add(new T.Mesh(new T.BoxGeometry(64, 9.5, 28), warm), 0, 6.5, -23, false);
+    add(new T.Mesh(new T.BoxGeometry(70, 12.5, 34), glass), 0, 7.5, -22);
+    for (let x = -33; x <= 33; x += 6) add(new T.Mesh(new T.BoxGeometry(0.35, 12.5, 0.5), dark), x, 7.5, -4.8, false);
+    // Counter and a few interior shapes, dark against the warm light.
+    add(new T.Mesh(new T.BoxGeometry(40, 3.5, 2), dark), 0, 3.2, -8, false);
+    for (const x of [-22, -8, 8, 22]) add(new T.Mesh(new T.BoxGeometry(5, 4.5, 5), dark), x, 3.6, -30, false);
+    // The flat roof, wide, with a soffit line.
+    add(new T.Mesh(new T.BoxGeometry(84, 1.3, 46), white), 0, 14.4, -22);
+    add(new T.Mesh(new T.BoxGeometry(80, 0.5, 42), dark), 0, 13.6, -22, false);
+    // The wing over the stalls on four thin columns.
+    add(new T.Mesh(new T.BoxGeometry(96, 0.9, 26), white), 0, 17.5, 14);
+    for (const x of [-40, -13, 13, 40]) add(new T.Mesh(new T.CylinderGeometry(0.45, 0.45, 17, 10), white), x, 8.5, 14);
+    // Charging stalls, each with a light strip.
+    for (let i = -3; i <= 4; i++) {
+      add(new T.Mesh(new T.BoxGeometry(1.3, 4.6, 1.0), white), i * 11 - 5.5, 3.7, 24);
+      add(new T.Mesh(new T.BoxGeometry(0.2, 2.2, 0.3), warm), i * 11 - 5.5, 3.9, 24.6, false);
+    }
+    // Two big screens, angled toward the lot, showing the 1973 tube.
     this.screens = [];
-    for (const sx of [-110, 110]) {
-      const post = new T.Mesh(new T.BoxGeometry(2, 30, 2), dark);
-      post.position.set(sx, 15, -40);
+    for (const sx of [-112, 112]) {
+      const stand = new T.Group();
+      stand.position.set(sx, 0, -44);
+      stand.rotation.y = sx < 0 ? 0.28 : -0.28;
+      const post = new T.Mesh(new T.BoxGeometry(2.4, 32, 2.4), dark);
+      post.position.y = 16;
       post.castShadow = true;
-      g.add(post);
-      const frame = new T.Mesh(new T.BoxGeometry(45, 34, 1.5), dark);
-      frame.position.set(sx, 42, -40);
+      const frame = new T.Mesh(new T.BoxGeometry(48, 37, 1.6), dark);
+      frame.position.y = 44;
       frame.castShadow = true;
-      g.add(frame);
-      const screen = new T.Mesh(new T.PlaneGeometry(43, 32.25), new T.MeshBasicMaterial({ map: this.tubeTexture, toneMapped: false }));
-      screen.position.set(sx, 42, -39.1);
-      g.add(screen);
+      const screen = new T.Mesh(new T.PlaneGeometry(46, 34.5), new T.MeshBasicMaterial({ map: this.tubeTexture, toneMapped: false }));
+      screen.position.set(0, 44, 0.9);
+      stand.add(post, frame, screen);
+      g.add(stand);
       this.screens.push(screen);
     }
-    // Charging stalls along the front.
-    for (let i = -3; i <= 3; i++) {
-      const stall = new T.Mesh(new T.BoxGeometry(1.6, 5, 1), dark);
-      stall.position.set(i * 9, 2.5, 14);
-      g.add(stall);
-    }
+    // A round sign on a pole, plain: a white disc in a thin dark ring.
+    add(new T.Mesh(new T.CylinderGeometry(0.6, 0.6, 34, 12), dark), 72, 17, 36);
+    const disc = add(new T.Mesh(new T.CylinderGeometry(7.5, 7.5, 0.6, 32), white), 72, 38, 36);
+    disc.rotation.x = Math.PI / 2;
+    const ring = add(new T.Mesh(new T.TorusGeometry(7.6, 0.35, 8, 40), dark), 72, 38, 36);
+    void ring;
     // The first customer: the 1973 lander, in light, at the end stall.
     const lander = this.buildLander();
-    lander.position.set(-40, 0, 22);
+    lander.position.set(-44, 0, 30);
     g.add(lander);
     return g;
   }
@@ -480,6 +606,9 @@ export class Roadster {
    * 'live', 'parked' (left by an earlier landing) or 'wreck'. */
   buildCar(kind = 'live') {
     const g = new T.Group();
+    // The body rides on the wheels: it can settle on touchdown.
+    const b = new T.Group();
+    g.add(b);
     const paint = kind === 'wreck'
       ? new T.MeshStandardMaterial({ color: 0x4a4744, roughness: 0.9, metalness: 0.1 })
       : new T.MeshPhysicalMaterial({ color: 0xf2f2ee, roughness: 0.35, metalness: 0.15, clearcoat: 0.8, clearcoatRoughness: 0.2 });
@@ -504,14 +633,14 @@ export class Roadster {
     body.position.z = -W / 2;
     body.castShadow = true;
     body.receiveShadow = true;
-    g.add(body);
+    b.add(body);
     // Wheel arches: dark discs in the flanks where the cutouts would be.
     const archMat = new T.MeshStandardMaterial({ color: 0x0e0e0f, roughness: 1 });
     for (const [x, z] of [[L * 0.32, W / 2], [L * 0.32, -W / 2], [-L * 0.3, W / 2], [-L * 0.3, -W / 2]]) {
       const arch = new T.Mesh(new T.CylinderGeometry(1.55, 1.55, 0.3, 24), archMat);
       arch.rotation.x = Math.PI / 2;
       arch.position.set(x, 1.3, z + (z > 0 ? 0.2 : -0.2));
-      g.add(arch);
+      b.add(arch);
     }
     // The cabin bubble and the single seat's canopy.
     // The canopy, hinged at its front edge so it can open.
@@ -522,7 +651,7 @@ export class Roadster {
     canopy.position.set(-3.0, 0.05, 0);
     canopy.castShadow = true;
     hinge.add(canopy);
-    g.add(hinge);
+    b.add(hinge);
     if (kind === 'live') this.canopy = hinge;
     // Wheels.
     const wheels = [];
@@ -530,9 +659,18 @@ export class Roadster {
       const w = new T.Group();
       const tyre = new T.Mesh(new T.CylinderGeometry(1.25, 1.25, 0.9, 24), rubber);
       tyre.rotation.x = Math.PI / 2;
-      const disc = new T.Mesh(new T.CylinderGeometry(0.8, 0.8, 0.95, 16), rim);
+      const disc = new T.Mesh(new T.CylinderGeometry(0.82, 0.82, 0.3, 16), rubber);
       disc.rotation.x = Math.PI / 2;
       w.add(tyre, disc);
+      for (let k = 0; k < 5; k++) {
+        const spoke = new T.Mesh(new T.BoxGeometry(0.22, 1.5, 0.12), rim);
+        spoke.rotation.z = (k / 5) * Math.PI * 2;
+        spoke.position.z = (z > 0 ? 1 : -1) * 0.38;
+        w.add(spoke);
+      }
+      const hub = new T.Mesh(new T.CylinderGeometry(0.22, 0.22, 1.0, 10), rim);
+      hub.rotation.x = Math.PI / 2;
+      w.add(hub);
       w.position.set(x, 1.25, z);
       tyre.castShadow = true;
       g.add(w);
@@ -544,14 +682,14 @@ export class Roadster {
     for (const x of [-L * 0.2, 0, L * 0.2]) {
       const n = new T.Mesh(new T.CylinderGeometry(0.35, 0.5, 0.5, 12), nozzle);
       n.position.set(x, 0.3, 0);
-      g.add(n);
+      b.add(n);
       nozzles.push(n);
     }
     const corners = [];
     for (const [x, z] of [[L * 0.42, W * 0.35], [L * 0.42, -W * 0.35], [-L * 0.45, W * 0.35], [-L * 0.45, -W * 0.35]]) {
       const n = new T.Mesh(new T.CylinderGeometry(0.18, 0.24, 0.4, 10), nozzle);
       n.position.set(x, 0.8, z);
-      g.add(n);
+      b.add(n);
       corners.push(n);
     }
     // Headlights, on (off on a wreck).
@@ -560,24 +698,36 @@ export class Roadster {
       for (const z of [-W * 0.33, W * 0.33]) {
         const l = new T.Mesh(new T.BoxGeometry(0.2, 0.35, 1.4), lamp);
         l.position.set(L / 2 + 0.05, 1.6, z);
-        g.add(l);
+        b.add(l);
       }
     }
     // A thin light bar across the tail, as cars have now.
     if (kind !== 'wreck') {
       const tail = new T.Mesh(new T.BoxGeometry(0.15, 0.18, W * 0.8), new T.MeshBasicMaterial({ color: 0xff2a1a }));
       tail.position.set(-L / 2 - 0.1, 2.2, 0);
-      g.add(tail);
+      b.add(tail);
     }
     // The driver, seated under the canopy, the arm toward the camera out
     // on the sill, as in the photographs from 2018.
     if (kind === 'live') {
+      // The gas itself: a faint cone under each nozzle, scaled by thrust.
+      const jet = new T.MeshBasicMaterial({ color: 0xcfe2ff, transparent: true, opacity: 0.1, blending: T.AdditiveBlending, depthWrite: false, side: T.DoubleSide });
+      this.jets = [];
+      for (const n of nozzles) {
+        const cone = new T.Mesh(new T.ConeGeometry(1.3, 1, 14, 1, true), jet);
+        cone.geometry.translate(0, -0.5, 0);
+        cone.position.copy(n.position);
+        cone.position.y -= 0.2;
+        b.add(cone);
+        this.jets.push(cone);
+      }
       const rider = new Astronaut();
       rider.group.position.set(-L * 0.12 - 0.3, 0.75, SEAT_Z);
       rider.group.scale.setScalar(0.92);
       rider.update(0, 'seated');
-      g.add(rider.group);
+      b.add(rider.group);
       this.rider = rider;
+      this.body = b;
       this.wheels = wheels;
       this.nozzles = nozzles;
       this.corners = corners;
@@ -672,14 +822,18 @@ export class Roadster {
     const close = this.scaleY < 1;
     // Far enough back that the car and the ground under it both fit the
     // frame, whatever its shape (phones are tall and narrow).
-    const fit = (alt + 30) / (2 * 0.78 * Math.tan(T.MathUtils.degToRad(this.camera.fov / 2)));
-    const d = close ? T.MathUtils.clamp(Math.max(alt * 0.9 + 85, fit), 80, 900) : T.MathUtils.clamp(Math.max(alt * 1.9 + 900, fit), 1200, 36000);
+    const fit = (alt + 30) / (2 * 1.15 * Math.tan(T.MathUtils.degToRad(this.camera.fov / 2)));
+    const d = close ? T.MathUtils.clamp(Math.max(alt * 0.6 + 55, fit), 55, 900) : T.MathUtils.clamp(Math.max(alt * 1.9 + 900, fit), 1200, 36000);
     const look = new T.Vector3(this.pose.x + (state.horvel / 10) * 0.6, ground + alt * (close ? 0.5 : 0.6) + 6, 0);
     let d2 = d;
     if (this.walking && this.driverX !== undefined) {
       // Both the car and the driver in the frame while he walks.
-      look.x = (this.pose.x + this.driverX) / 2;
-      d2 = Math.max(d, Math.abs(this.driverX - this.pose.x) * 1.4 + 60);
+      // Follow the driver; the car comes into the frame as he nears it.
+      const gap = Math.abs(this.driverX - this.pose.x);
+      const near = T.MathUtils.smoothstep(gap, 10, 30);
+      look.x = T.MathUtils.lerp((this.pose.x + this.driverX) / 2, this.driverX, near);
+      look.y = ground + 6.5;
+      d2 = Math.max(42, T.MathUtils.lerp(gap * 0.9 + 40, 58, near));
     }
     // Low elevation, as the 1973 side view was: the needle mountains read
     // as a skyline, and the depth behind them is the bonus.
@@ -713,6 +867,15 @@ export class Roadster {
     // Exhaust: cold gas from the floor array in proportion to thrust.
     const thrust = this.exploded ? 0 : Math.max(0, state.thrust);
     const maxThrust = this.maxThrust || 1;
+    if (this.jets) {
+      const f = thrust / maxThrust;
+      for (const [i, jet] of this.jets.entries()) {
+        jet.visible = f > 0 && alt > 0;
+        const flick = 0.85 + 0.3 * Math.sin(now * 0.021 + i * 2.1) * Math.sin(now * 0.0137 + i);
+        jet.scale.set(0.6 + 0.6 * f, (4 + 14 * f) * flick, 0.6 + 0.6 * f);
+        jet.material.opacity = 0.05 + 0.14 * f;
+      }
+    }
     if (thrust > 0 && alt > 0) {
       const rate = (0.3 + 0.7 * (thrust / maxThrust)) * 2400 * dt;
       const q = new T.Quaternion().setFromEuler(this.car.rotation);
@@ -741,12 +904,33 @@ export class Roadster {
     }
     this.plume.step(dt);
     this.dust.step(dt, (x) => this.height(x));
+    this.smoke.step(dt, (x) => this.height(x));
 
+    // Touchdown: the body settles on its springs and comes back.
+    if (this.prevRadary > 0 && state.radary <= 0 && state.verdis < 450 && !this.exploded) {
+      this.squat = { t: 0, a: Math.min(0.45, 0.08 + Math.abs(this.lastState.vervel) / 400) };
+    }
+    this.prevRadary = state.radary;
+    if (this.squat) {
+      this.squat.t += dt;
+      const q = this.squat;
+      this.body.position.y = -q.a * Math.exp(-q.t / 0.35) * Math.cos(q.t * 11);
+      if (q.t > 2) {
+        this.squat = null;
+        this.body.position.y = 0;
+      }
+    }
     // A crash: the program stops drawing the ship (SHIPDP cleared) once it
     // has drawn it at least once this game.
     if (state.shipdp !== 0) this.shipSeen = true;
     if (this.shipSeen && state.shipdp === 0 && !this.exploded) this.explode();
     if (this.debris) this.debris.step(dt, (x) => this.height(x));
+    if (this.flashAt) {
+      const f = (now - this.flashAt) / 1000;
+      this.flash.position.copy(this.car.position).add(new T.Vector3(0, 6, 0));
+      this.flash.intensity = f < 0.6 ? 4000 * Math.exp(-f * 7) : 0;
+      if (f > 1) this.flashAt = 0;
+    }
     if (this.rereadAt && this.rereadAt.length && now >= this.rereadAt[0]) {
       this.rereadAt.shift();
       this.rereadTerrain();
@@ -783,6 +967,8 @@ export class Roadster {
     const burst = new T.Vector3(0, 1, 0);
     this.plume.emit(this.car.position, burst, 600, this.car.scale.x * 3, 1);
     this.dust.emit(new T.Vector3(this.car.position.x, this.height(this.car.position.x), 0), 500, this.car.scale.x * 2);
+    this.smoke.emit(this.car.position.clone(), 300, this.car.scale.x * 4);
+    this.flashAt = performance.now();
   }
 
   /** The diner stands, or lies flattened by a car. */

@@ -2,7 +2,7 @@
 // JavaScript build step and no CDN.
 export {
   Scene, PerspectiveCamera, WebGLRenderer, Group, Mesh, InstancedMesh, Object3D, Color, Vector2, Vector3, Vector4, Quaternion, Euler, Matrix4, MathUtils, Clock,
-  BufferGeometry, BufferAttribute, Float32BufferAttribute, InstancedBufferAttribute, PlaneGeometry, BoxGeometry, SphereGeometry, CylinderGeometry, ConeGeometry, TorusGeometry, CapsuleGeometry, ExtrudeGeometry, ShapeGeometry, LatheGeometry, Shape, Path, EdgesGeometry, RingGeometry, CircleGeometry,
+  BufferGeometry, BufferAttribute, Float32BufferAttribute, InstancedBufferAttribute, PlaneGeometry, BoxGeometry, SphereGeometry, CylinderGeometry, ConeGeometry, TorusGeometry, CapsuleGeometry, ExtrudeGeometry, ShapeGeometry, LatheGeometry, Shape, Path, EdgesGeometry, RingGeometry, CircleGeometry, DodecahedronGeometry, IcosahedronGeometry, TubeGeometry, CatmullRomCurve3, QuadraticBezierCurve3,
   MeshStandardMaterial, MeshPhysicalMaterial, MeshBasicMaterial, MeshLambertMaterial, LineBasicMaterial, PointsMaterial, ShaderMaterial, SpriteMaterial, ShadowMaterial,
   Line, LineSegments, LineLoop, Points, Sprite,
   AmbientLight, DirectionalLight, HemisphereLight, PointLight, SpotLight,
