@@ -16,6 +16,7 @@ import * as T from '../vendor/three.js';
 import { Choreo, EXIT, DOOR, canopyOut } from './choreo.js';
 import { Gait, BODY, fwdOf, wrapAngle } from './astronaut.js';
 import { clamp, lerp, smoothstep } from './shape.js';
+import { BAG } from './props.js';
 
 const FT_PER_UNIT = 2 / 3; // a raster unit of the close-up
 const STEP_S = 8 / 60; // MOVMAN: one step every eight ticks
@@ -49,6 +50,7 @@ export class Driver {
     this.x = undefined;
     this.speedIn = 1;
     this.armed = false;
+    this.man.handsWere = this.man.handMoves = null;
     this.world.props.reset();
   }
 
@@ -115,6 +117,7 @@ export class Driver {
   update(state, mt, dt, landed) {
     const w = this.world;
     const car = w.car;
+    this.dt = dt;
     const ground = (x, z) => w.groundAt(x, z);
     // Learn what is coming.
     if (!landed) this.armed = true;
@@ -199,7 +202,7 @@ export class Driver {
   }
 
   pose(pose) {
-    this.man.apply(pose);
+    this.man.apply(pose, this.dt ?? null);
     this.last = pose;
     this.world.props.follow(this.man, this);
   }
@@ -236,10 +239,10 @@ export class Driver {
           // A hand up to the window: one, please.
           arms = [null, { wrist: new T.Vector3(win.x + 0.35, w.groundAt(win.x, win.z) + 4.6, win.z - 1.05) }];
         } else if (s < 4.4) {
-          props.boxAt(win.x, w.groundAt(win.x, win.z) + 3.72, win.z - 0.98, smoothstep(2.6, 3.6, s));
+          props.boxAt(win.x, w.groundAt(win.x, win.z) + 3.5, win.z - 0.98, smoothstep(2.6, 3.6, s));
           if (s > 3.7) {
-            const bx = new T.Vector3(win.x, w.groundAt(win.x, win.z) + 3.92, win.z - 0.98);
-            arms = [{ wrist: bx.clone().add(new T.Vector3(-0.42, 0.05, 0.05)) }, { wrist: bx.clone().add(new T.Vector3(0.42, 0.05, 0.05)) }];
+            const bx = new T.Vector3(win.x, w.groundAt(win.x, win.z) + 3.5 + BAG.h * 0.55, win.z - 0.98);
+            arms = [{ wrist: bx.clone().add(new T.Vector3(-(BAG.w / 2 + 0.12), 0.05, 0.05)) }, { wrist: bx.clone().add(new T.Vector3(BAG.w / 2 + 0.12, 0.05, 0.05)) }];
           }
         } else {
           this.carry = 'box';
@@ -256,7 +259,7 @@ export class Driver {
         const steps = seen.up ? Math.max(0, 22 - (state.many - seen.minMany)) : 22;
         const lift = mt + (seen.shown ? toFoot + steps * STEP_S : 0) + 2.0;
         const there = Math.hypot(g.x - door.x, g.z - door.z) < 0.12 && Math.abs(wrapAngle(g.yaw - DOOR.yaw)) < 0.08 && g.mode === 'stand';
-        const left = lift - mt - 0.35;
+        const left = lift - mt - 0.9; // in, and settled, before it goes
         const D = this.choreo.duration;
         if ((there && left < D * 1.05) || w.liftingOff || (!seen.shown && there)) {
           this.speedIn = clamp(D / Math.max(0.5, left), 1, 3);
@@ -303,7 +306,9 @@ export class Driver {
 
     const pose = g.update(dt, goal);
     if (this.carry === 'box') {
-      pose.arms = [{ local: new T.Vector3(0.74, 0.78, -0.32) }, { local: new T.Vector3(0.74, 0.78, 0.32) }];
+      // The bag between his hands, at his middle.
+      const z = BAG.w / 2 + 0.06;
+      pose.arms = [{ local: new T.Vector3(0.74, 0.86, -z) }, { local: new T.Vector3(0.74, 0.86, z) }];
     }
     if (arms) {
       for (let i = 0; i < 2; i++) {

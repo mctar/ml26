@@ -31,21 +31,21 @@ export const EXIT = [
     t: 0,
     pelvis: [SEAT.x, SEAT.y, 0], yaw: 0, hipPitch: -0.24, lean: -0.16, look: 0.12,
     feet: [{ p: [2.3, F, -0.42], pitch: -0.25 }, { p: [2.3, F, 0.42], pitch: -0.25 }],
-    hands: [{ p: [0.55, 1.95, -0.4], pole: [-0.5, -0.4, -0.15] }, { p: [0.55, 1.95, 0.4], pole: [-0.5, -0.4, 0.15] }],
+    hands: [{ p: [0.55, 1.95, -0.4], pole: [-0.5, -0.4, -0.5] }, { p: [0.55, 1.95, 0.4], pole: [-0.5, -0.4, 0.5] }],
   },
   {
     // The canopy is up. Sit up, feet drawn back, hands to the sills.
     t: 1.6,
     pelvis: [SEAT.x + 0.05, SEAT.y + 0.03, 0], yaw: 0, hipPitch: 0, lean: 0.2, look: 0.1,
     feet: [{ p: [0.56, F, -0.4], arc: 0.25 }, { p: [0.56, F, 0.4], arc: 0.25 }],
-    hands: [{ p: [-0.2, sill(-0.2, 1.68) + 0.36, -1.68], pole: [-1, 1, -0.2], arc: 1.0 }, { p: [-0.2, sill(-0.2, 1.68) + 0.36, 1.68], pole: [-1, 1, 0.2], arc: 1.0 }],
+    hands: [{ p: [-0.2, sill(-0.2, 1.68) + 0.36, -1.68], pole: [-1, 1, -0.7], arc: 1.0 }, { p: [-0.2, sill(-0.2, 1.68) + 0.36, 1.68], pole: [-1, 1, 0.7], arc: 1.0 }],
   },
   {
     // Halfway up, pushing on the sills.
     t: 2.3,
     pelvis: [0.32, 2.62, 0], yaw: 0, hipPitch: 0.35, lean: 0.4, look: 0.3,
     feet: [{ p: [0.56, F, -0.4] }, { p: [0.56, F, 0.4] }],
-    hands: [{ p: [0.05, sill(0.05, 1.62) + 0.36, -1.62], pole: [-1, 1, -0.2] }, { p: [0.05, sill(0.05, 1.62) + 0.36, 1.62], pole: [-1, 1, 0.2] }],
+    hands: [{ p: [0.05, sill(0.05, 1.62) + 0.36, -1.62], pole: [-1, 1, -0.7] }, { p: [0.05, sill(0.05, 1.62) + 0.36, 1.62], pole: [-1, 1, 0.7] }],
   },
   {
     // Standing in the cockpit.
@@ -72,21 +72,21 @@ export const EXIT = [
     // ... and onto the sill.
     t: 5.0,
     pelvis: [0.38, 3.45, 0.95], yaw: OUT, hipPitch: 0.3, lean: 0.3, look: 0.2,
-    feet: [{ p: [0.7, 0, 2.0], yaw: OUT, arc: 0.15 }, { p: [-0.06, F, 0.1], yaw: OUT, pole: [0, 1, 0.15] }],
+    feet: [{ p: [0.7, 0, 2.0], yaw: OUT, arc: 0.15 }, { p: [-0.06, F, 0.1], yaw: OUT, pole: [-1, 0.3, 0.4] }],
     hands: [{ fk: [0.7, 0.35, 0.5] }, { fk: [0.6, 0.35, 0.5] }],
   },
   {
     // The right foot lifted, straight up.
     t: 5.45,
     pelvis: [0.38, 3.75, 0.98], yaw: OUT, hipPitch: 0.25, lean: 0.3, look: 0.25,
-    feet: [{ p: [0.7, 0, 2.0], yaw: OUT }, { p: [-0.02, 2.55, 0.3], yaw: OUT, air: true, arc: 0.3, pole: [0, 1, 0.15] }],
+    feet: [{ p: [0.7, 0, 2.0], yaw: OUT }, { p: [-0.06, 2.55, 0.7], yaw: OUT, air: true, arc: 0.3, pole: [-0.7, 0.5, 1] }],
     hands: [{ fk: [0.8, 0.4, 0.45] }, { fk: [0.8, 0.4, 0.45] }],
   },
   {
     // Up on the left leg, the right foot over the edge.
     t: 6.0,
     pelvis: [0.38, 4.25, 1.7], yaw: OUT, hipPitch: 0.25, lean: 0.25, look: 0.25,
-    feet: [{ p: [0.7, 0, 2.0], yaw: OUT }, { p: [0.04, 3.0, 1.35], yaw: OUT, air: true, arc: 0.2, pole: [0, 1, 0.4] }],
+    feet: [{ p: [0.7, 0, 2.0], yaw: OUT }, { p: [0.04, 3.0, 1.35], yaw: OUT, air: true, arc: 0.2, pole: [0, 0.3, 1] }],
     hands: [{ fk: [0.8, 0.4, 0.45] }, { fk: [0.8, 0.4, 0.45] }],
   },
   {
@@ -230,7 +230,7 @@ export class Choreo {
       // A foot on the move takes its knee where the next key says, at once
       // (a straight leg hardly shows it); a foot at rest blends.
       const moving = a.ankle.distanceToSquared(b.ankle) > 1e-6;
-      const pole = kp(k1.feet[j]).lerp(kp(k2.feet[j]), moving ? smoothstep(0, 0.15, s) : e);
+      const pole = kp(k1.feet[j]).lerp(kp(k2.feet[j]), moving ? smoothstep(0, 0.45, s) : e);
       return { ankle, dir, up, pole };
     });
 
@@ -247,8 +247,10 @@ export class Choreo {
         const pole = poleAt(a) && poleAt(b) ? poleAt(a).lerp(poleAt(b), e) : poleAt(b) || poleAt(a);
         return { wrist: w, pole };
       }
-      // From a hold to a free arm, or back: let go (or take hold) halfway.
-      return (pa ? e < 0.5 : e >= 0.5) ? { wrist: pa || pb, pole: poleAt(pa ? a : b) } : { fk: (a.fk || b.fk) };
+      // From a hold to a free arm, or back: the hand lifts off the hold
+      // and goes to the side (or comes from it to the hold).
+      const hold = (p, h) => ({ wrist: p, pole: poleAt(h) });
+      return { mix: [pa ? hold(pa, a) : { fk: a.fk }, pb ? hold(pb, b) : { fk: b.fk }], k: e, arc: 0.35 };
     });
     if (opts.carry) arms[0] = { local: new T.Vector3(0.56, 1.1, -0.18) };
     return { pelvis, orient, hipPitch: this.ang.hipPitch(t), lean: this.ang.lean(t), look: this.ang.look(t), feet, arms };

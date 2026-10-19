@@ -18,6 +18,10 @@ const LEAD = 8_000;
 const MAX_STEP = 250_000;
 /** Machine time at which the greeting ends and the game begins. */
 const GAME_START = 30.6e6;
+/** The program's verdicts on a landing. */
+const LANDINGS = ['GREATM', 'GOODM', 'ROUGHM', 'CRIPM'];
+/** The layers that can sit over the flight, topmost first. */
+const OVERLAYS = ['guide', 'about', 'ending'];
 
 const FIELDS = ['pen_x', 'pen_y', 'pen_down', 'throttle', 'turning', 'choice', 'slot', 'pilot', 'stop'];
 
@@ -25,7 +29,6 @@ const FIELDS = ['pen_x', 'pen_y', 'pen_down', 'throttle', 'turning', 'choice', '
 const MESSAGES_2026 = {
   ...MESSAGES,
   GREATM: 'WELL, IT WORKED.',
-  ORDER: 'ONE BURGER IN A CYBERTRUCK BOX, TO GO.',
   MANMSG: 'MADE ON EARTH BY HUMANS.',
   ROCKMS: 'YOU JUST CRASHED INTO 2018 CN41',
   TOPMSG: 'SORRY, BUT WHEN YOU LOSE THE LIVESTREAM, YOU ALSO LOSE YOUR AIR',
@@ -58,6 +61,8 @@ class Page {
     this.tRender = 0;
     this.lastFrame = 0;
     this.arrival = true;
+    this.holds = new Set(); // what is holding the flight: an open sheet, the end card
+    this.flight = null; // this descent: when it began, how it came down, whether he ordered
   }
 
   wallMachine() {
@@ -105,7 +110,20 @@ class Page {
     const t0 = performance.now();
     this.tMachine += t0 - (this.tResume || t0);
     await new Promise((r) => requestAnimationFrame(r));
-    const t1 = performance.now();
+    let t1 = performance.now();
+    // While something is over the flight (a sheet, the end card) the
+    // machine is given no time at all, and the scene stands still; on
+    // release it carries on from the same instant.
+    if (this.holds.size) {
+      this.rate = 0;
+      while (this.holds.size) {
+        this.draw(t1);
+        await new Promise((r) => requestAnimationFrame(r));
+        t1 = performance.now();
+      }
+      this.originT = this.takenAt;
+      this.originWall = t1;
+    }
     // The greeting runs fast behind the arrival card; then the machine
     // holds until the card is dismissed; then the game at its pace.
     const wanted = this.greeting() ? this.fastRate : this.arrival ? 0 : this.userRate;
@@ -202,20 +220,39 @@ class Page {
     if (!s) return;
     const exploded = this.roadster.exploded;
     this.sound.update(exploded ? 0 : this.roadster.thrustNow, s, 0);
+    const alt = (this.alt = this.altitude(s));
     if (p) {
       if (s.radius > 0 && p.radius === 0) this.sound.explosion();
-      else if (s.radary <= 0 && p.radary > 0 && s.verdis < 450 && !exploded) this.sound.contact(p.vervel / 10);
+      else if (alt <= 0 && this.altPrev > 0 && s.verdis < 450 && !exploded) this.sound.contact(p.vervel / 10);
       if (this.roadster.puffing && !this.puffWas) this.sound.puff();
     }
     this.puffWas = this.roadster.puffing;
+    this.altPrev = alt;
     this.prev = { ...s };
+  }
+
+  /**
+   * The radar height, as the dashboard shows it. In the close-up the
+   * program works it out twice a step: from the full table (for the far
+   * view), and from the close-up's own ground, a quarter as high. Only the
+   * second is the height above the ground you see, so the first is passed
+   * over there; it shows which it is by the ground height it leaves behind.
+   */
+  altitude(s) {
+    const ter = this.roadster.terrain;
+    if (ter && this.roadster.closeUp(s)) {
+      const full = (ter[s.bigxct] + ter[s.bigxct + 1]) >> 1;
+      if (s.avery === full && full >> 2 !== full) return this.altWas ?? s.radary;
+    }
+    this.altWas = s.radary;
+    return s.radary;
   }
 
   hud() {
     const s = this.state;
     if (!s) return;
     if (this.frames % 3 === 0) {
-      $('r-alt').textContent = Math.max(0, s.radary).toLocaleString('en-US');
+      $('r-alt').textContent = Math.max(0, this.alt ?? s.radary).toLocaleString('en-US');
       $('r-dist').textContent = s.hordis.toLocaleString('en-US');
       $('r-vv').textContent = (s.vervel / 10).toFixed(1);
       $('r-hv').textContent = (s.horvel / 10).toFixed(1);
@@ -237,6 +274,7 @@ class Page {
       }
     }
     const m = messageName(this.engine.symbols, s.sysmes);
+    this.follow(s, m);
     if (m !== this.lastMessage) {
       this.lastMessage = m;
       $('message').textContent = m ? MESSAGES_2026[m] : '';
@@ -258,6 +296,125 @@ class Page {
         $('status').textContent = `${secs} s`;
       }
     }
+  }
+
+  /**
+   * This descent, for the end card: when it began (after the greeting, or
+   * when the program starts again high up), how it came down, and whether
+   * he ordered. When the car has gone from the diner, the card.
+   */
+  follow(s, m) {
+    if (s.t < GAME_START) return;
+    if (!this.flight || s.verdis - this.flight.verdis > 15000) this.flight = { t: s.t, verdis: s.verdis, touchdown: null, ordered: false, ended: false };
+    const f = this.flight;
+    f.verdis = s.verdis;
+    if (!f.touchdown && LANDINGS.includes(m) && s.verdis < 450) f.touchdown = { vv: s.vervel / 10, msg: m, t: s.t, air: s.fuel / 10 };
+    if (m === 'ORDER') f.ordered = true;
+    // The program takes the car off the screen once it has climbed away.
+    if (f.ordered && !f.ended && s.shipdp === 0) {
+      f.ended = true;
+      this.ending(f);
+    }
+  }
+
+  /** The end of a visit to the diner: how it went, and what next. */
+  ending(f) {
+    const td = f.touchdown;
+    $('end-vv').textContent = td ? Math.abs(td.vv).toFixed(1) : '0';
+    $('end-grade').textContent = td ? MESSAGES_2026[td.msg] : '';
+    $('end-time').textContent = td ? Math.round((td.t - f.t) / 1e6).toLocaleString('en-US') : '0';
+    $('end-air').textContent = td ? Math.max(0, Math.round(td.air)).toLocaleString('en-US') : '0';
+    $('end-share').textContent = 'Copy replay link';
+    this.show('ending');
+  }
+
+  /** The flight stops while anything is over it, and goes on after. */
+  hold(why, on) {
+    if (on) this.holds.add(why);
+    else this.holds.delete(why);
+    this.sound.pause(this.holds.size > 0);
+  }
+
+  /** Open a sheet or the end card over the flight, which waits. */
+  show(id) {
+    const el = $(id);
+    if (!el.classList.contains('hidden')) return;
+    for (const other of ['guide', 'about']) if (other !== id) this.hide(other, false);
+    if (!this.overlay()) this.returnFocus = document.activeElement;
+    el.classList.remove('hidden');
+    el.scrollTop = 0;
+    this.hold(id, true);
+    (el.querySelector('.primary, .close') || el).focus({ preventScroll: true });
+  }
+
+  hide(id, refocus = true) {
+    const el = $(id);
+    if (el.classList.contains('hidden')) return;
+    el.classList.add('hidden');
+    this.hold(id, false);
+    const top = this.overlay();
+    if (top) $(top).querySelector('.primary, .close')?.focus({ preventScroll: true });
+    else {
+      const back = this.returnFocus;
+      this.returnFocus = null;
+      if (refocus && back && back !== document.body && document.contains(back) && back.offsetParent !== null) back.focus({ preventScroll: true });
+      else if (el.contains(document.activeElement)) document.activeElement.blur();
+    }
+  }
+
+  /** The layer on top, if any. */
+  overlay() {
+    return OVERLAYS.find((id) => !$(id).classList.contains('hidden')) || null;
+  }
+
+  /** Keys while something is over the flight: close it, or the card's own. */
+  overlayKey(top, ev) {
+    if (ev.code === 'Escape') {
+      this.hide(top);
+      ev.preventDefault();
+      return;
+    }
+    if (ev.code === 'Tab') {
+      // Round the layer's own controls, not out to the page under it.
+      const all = [...$(top).querySelectorAll('button, a[href]')].filter((b) => b.offsetParent !== null);
+      if (!all.length) return;
+      const i = all.indexOf(document.activeElement);
+      const next = ev.shiftKey ? (i <= 0 ? all.length - 1 : i - 1) : i === all.length - 1 ? 0 : i + 1;
+      all[next].focus();
+      ev.preventDefault();
+      return;
+    }
+    if (ev.repeat) return;
+    if (top === 'guide' && (ev.code === 'KeyH' || ev.key === '?')) this.hide('guide');
+    else if (top === 'ending') {
+      if (ev.code === 'KeyS') this.copyReplay($('end-share'));
+      else if (ev.code === 'KeyR') this.playAgain();
+      else if (ev.code === 'KeyH' || ev.key === '?') this.show('guide');
+    }
+  }
+
+  /** From the end card: a new flight, from the top. */
+  playAgain() {
+    this.hide('ending', false);
+    this.restart();
+  }
+
+  /** The link that replays this flight: in the address bar, and copied
+   * where the browser allows it. */
+  copyReplay(button = null) {
+    this.share().then((u) => {
+      history.replaceState(null, '', u);
+      if (button) button.textContent = 'Replay link copied';
+      else {
+        $('message').textContent = 'REPLAY LINK COPIED. THE URL NOW HOLDS THIS FLIGHT.';
+        this.lastMessage = undefined;
+      }
+      try {
+        navigator.clipboard?.writeText(u).catch(() => {});
+      } catch (e) {
+        /* the address bar has it */
+      }
+    });
   }
 
   /** For tests: draw the current view once and return it as a PNG. */
@@ -319,7 +476,10 @@ class Page {
       }
     }
     this.bind();
-    if (q.has('pilot')) this.pending.push(['pilot', Number(q.get('pilot')) || 0]);
+    if (q.has('pilot')) {
+      this.pending.push(['pilot', Number(q.get('pilot')) || 0]);
+      this.coached();
+    }
     for (;;) {
       this.originWall = performance.now();
       this.originT = 0;
@@ -329,6 +489,9 @@ class Page {
       this.recording = [];
       this.replayAt = 0;
       this.wanted = undefined;
+      this.flight = null;
+      this.altWas = undefined;
+      this.altPrev = undefined;
       this.phosphor.clear();
       this.phosphor.now = 0;
       this.roadster.reset();
@@ -443,16 +606,35 @@ class Page {
     }
 
     $('view-toggle').addEventListener('click', () => this.setView(this.view === 'tube' ? 'roadster' : 'tube'));
-    $('about-toggle').addEventListener('click', () => $('about').classList.remove('hidden'));
-    $('about-close').addEventListener('click', () => $('about').classList.add('hidden'));
+    $('about-toggle').addEventListener('click', () => this.show('about'));
+    $('about-close').addEventListener('click', () => this.hide('about'));
+    $('guide-toggle').addEventListener('click', () => this.show('guide'));
+    $('guide-close').addEventListener('click', () => this.hide('guide'));
+    $('end-again').addEventListener('click', () => this.playAgain());
+    $('end-share').addEventListener('click', (ev) => this.copyReplay(ev.currentTarget));
+    $('end-guide').addEventListener('click', () => this.show('guide'));
+    // A click on a sheet's backdrop, outside its text, closes it.
+    for (const id of ['guide', 'about']) $(id).addEventListener('click', (ev) => {
+      if (ev.target === ev.currentTarget) this.hide(id);
+    });
     $('arrival').addEventListener('click', () => this.wake());
     $('arrival').addEventListener('touchend', () => this.wake(), { passive: true });
 
     this.held = new Set();
     window.addEventListener('keydown', (ev) => {
+      const top = this.overlay();
+      if (top) {
+        this.overlayKey(top, ev);
+        return;
+      }
+      if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
       if (ev.repeat && !['ArrowUp', 'ArrowDown'].includes(ev.code)) return;
-      if (ev.code === 'Escape') $('about').classList.add('hidden');
       this.wake();
+      if (ev.key === '?') {
+        this.show('guide');
+        ev.preventDefault();
+        return;
+      }
       this.held.add(ev.code);
       switch (ev.code) {
         case 'ArrowLeft':
@@ -478,12 +660,10 @@ class Page {
           this.restart();
           break;
         case 'KeyS':
-          this.share().then((u) => {
-            navigator.clipboard?.writeText(u).catch(() => {});
-            history.replaceState(null, '', u);
-            $('message').textContent = 'REPLAY LINK COPIED. THE URL NOW HOLDS THIS FLIGHT.';
-            this.lastMessage = undefined;
-          });
+          this.copyReplay();
+          break;
+        case 'KeyH':
+          this.show('guide');
           break;
         default:
           return;
@@ -510,6 +690,7 @@ class Page {
 
   /** Sound can start only from a gesture. */
   wake() {
+    if (this.holds.size) return;
     try {
       this.sound.wake();
     } catch (e) {

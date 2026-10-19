@@ -25,6 +25,31 @@ const TERRAIN_X0 = -22400; // feet at index 0
 const TERRAIN_DX = 32; // feet per index
 // The diner's lot: a slab, its extent about the DINER feature.
 const PAD = { x0: -55, x1: 55, z0: -37, z1: 33 };
+/** The lot's edge: a chamfer, so that its kerb is stepped onto, not up a
+ * wall: it drops this much (ft) over this width. */
+const KERB = { drop: 1.0, width: 1.5 };
+
+/** The lot's slab: a level top, chamfered edges, and straight sides down
+ * to `depth` below the top. Its top is at y = 0. */
+function padGeometry(depth) {
+  const { x0, x1, z0, z1 } = PAD, c = KERB.width, k = KERB.drop;
+  const top = [[x0 + c, z0 + c], [x1 - c, z0 + c], [x1 - c, z1 - c], [x0 + c, z1 - c]];
+  const rim = [[x0, z0], [x1, z0], [x1, z1], [x0, z1]];
+  const pos = [];
+  const quad = (a, b, c2, d) => pos.push(...a, ...b, ...c2, ...a, ...c2, ...d);
+  const at = ([x, z], y) => [x, y, z];
+  // Wound so the faces look up and out.
+  quad(at(top[0], 0), at(top[3], 0), at(top[2], 0), at(top[1], 0));
+  for (let i = 0; i < 4; i++) {
+    const j = (i + 1) % 4;
+    quad(at(top[i], 0), at(top[j], 0), at(rim[j], -k), at(rim[i], -k));
+    quad(at(rim[i], -k), at(rim[j], -k), at(rim[j], -Math.max(depth, k + 0.1)), at(rim[i], -Math.max(depth, k + 0.1)));
+  }
+  const g = new T.BufferGeometry();
+  g.setAttribute('position', new T.Float32BufferAttribute(pos, 3));
+  g.computeVertexNormals();
+  return g;
+}
 // The program's verdicts on a landing that leaves the ship standing.
 const LANDINGS = ['GREATM', 'GOODM', 'ROUGHM', 'CRIPM'];
 
@@ -280,7 +305,12 @@ export class Roadster {
     const h = this.heightAt(x, z);
     if (this.pad) {
       const lx = x - this.pad.x, p = PAD;
-      if (lx > p.x0 && lx < p.x1 && z > p.z0 && z < p.z1) return Math.max(h, this.pad.y);
+      if (lx > p.x0 && lx < p.x1 && z > p.z0 && z < p.z1) {
+        // Down the chamfer at the edge.
+        const c = KERB.width;
+        const out = Math.max(p.x0 + c - lx, lx - (p.x1 - c), p.z0 + c - z, z - (p.z1 - c), 0);
+        return Math.max(h, this.pad.y - (out / c) * KERB.drop);
+      }
     }
     return h;
   }
@@ -568,7 +598,8 @@ float blastAt(vec2 p){
         }
         this.pad = { x, y: top + 0.25 };
         o.position.set(x, this.pad.y, 0);
-        this.padSlab.scale.y = this.pad.y - low + 1.5;
+        this.padSlab.geometry.dispose();
+        this.padSlab.geometry = padGeometry(this.pad.y - low + 1.5);
       } else o.position.set(x, this.height(x) + lift, z);
     }
   }
@@ -592,9 +623,7 @@ float blastAt(vec2 p){
       return mesh;
     };
     // The lot: a slab, its top at the origin, deep enough to meet the ground.
-    const slabGeo = new T.BoxGeometry(PAD.x1 - PAD.x0, 1, PAD.z1 - PAD.z0);
-    slabGeo.translate((PAD.x0 + PAD.x1) / 2, -0.5, (PAD.z0 + PAD.z1) / 2);
-    this.padSlab = add(new T.Mesh(slabGeo, concrete), 0, 0, 0, false);
+    this.padSlab = add(new T.Mesh(padGeometry(2), concrete), 0, 0, 0, false);
     // The building: lit inside, glass outside, mullions across the front.
     add(new T.Mesh(new T.BoxGeometry(64, 9.5, 28), warm), 0, 5.8, -23, false);
     add(new T.Mesh(new T.BoxGeometry(70, 12.5, 34), glass), 0, 6.8, -22);

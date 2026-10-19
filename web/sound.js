@@ -10,10 +10,18 @@ export class Sound {
     this.bells = 0;
   }
 
+  /** Hold every sound, the radio's too, where it is; or let it go on. */
+  pause(on) {
+    this.paused = on;
+    if (!this.ac) return;
+    if (on && this.ac.state === 'running') this.ac.suspend();
+    if (!on && this.ac.state === 'suspended') this.ac.resume();
+  }
+
   /** Start the audio context. Browsers allow this only from a gesture. */
   wake() {
     if (this.ac) {
-      if (this.ac.state === 'suspended') this.ac.resume();
+      if (this.ac.state === 'suspended' && !this.paused) this.ac.resume();
       return;
     }
     const AC = window.AudioContext || window.webkitAudioContext;

@@ -1,6 +1,7 @@
 // What the driver carries: a flag, folded small in his pack until it is
-// wanted, and, from the McDonald's, his order in a box with a familiar
-// angular profile, in brushed steel. No marks on either beyond the flag's.
+// wanted, and, from the McDonald's, his order (two cheeseburgers and a Big
+// Mac, as in 1973) in a plain paper bag with the top folded over. No marks
+// on either beyond the flag's.
 
 import * as T from '../vendor/three.js';
 import { smoothstep, lerp } from './shape.js';
@@ -103,22 +104,44 @@ export class Flag {
   }
 }
 
-/** The order: an angular steel box. */
+/** The bag's size: deep (x, the way he faces), tall, wide (z). */
+export const BAG = { d: 0.42, h: 0.74, w: 0.56 };
+
+/** The order: a paper bag, its top folded down over the front, a little
+ * crumpled from the counter. Its origin is at its middle. */
 export function makeBox(env = null) {
-  const s = new T.Shape();
-  // Side profile: a flat bed, a long raked top meeting a short nose.
-  s.moveTo(-0.55, 0);
-  s.lineTo(0.55, 0);
-  s.lineTo(0.55, 0.2);
-  s.lineTo(0.02, 0.44);
-  s.lineTo(-0.55, 0.3);
-  s.closePath();
-  const g = new T.ExtrudeGeometry(s, { depth: 0.58, bevelEnabled: true, bevelThickness: 0.012, bevelSize: 0.012, bevelSegments: 1 });
-  g.translate(0, -0.22, -0.29);
-  const m = new T.Mesh(g, new T.MeshStandardMaterial({ color: 0xb9bcbf, metalness: 0.85, roughness: 0.38, envMap: env, envMapIntensity: 1.2 }));
-  m.castShadow = true;
-  m.receiveShadow = true;
-  return m;
+  const { d, h, w } = BAG;
+  const paper = new T.MeshStandardMaterial({ color: 0xa27c55, roughness: 0.93, metalness: 0, envMap: env, envMapIntensity: 1.0 });
+  const g = new T.Group();
+  const body = new T.BoxGeometry(d, h, w, 4, 6, 5);
+  // Crumple: every corner of the mesh moved a little, the same way for the
+  // same point, so the faces still meet.
+  const pos = body.attributes.position;
+  const v = new T.Vector3();
+  const hash = (x, y, z) => {
+    const n = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453;
+    return n - Math.floor(n) - 0.5;
+  };
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i);
+    const k = 0.022 * (0.4 + (v.y / h + 0.5)); // looser toward the top
+    pos.setXYZ(i, v.x + hash(v.x, v.y, v.z) * k, v.y + hash(v.z, v.x, v.y) * k * 0.5, v.z + hash(v.y, v.z, v.x) * k);
+  }
+  body.computeVertexNormals();
+  const add = (geo, x, y, z) => {
+    const m = new T.Mesh(geo, paper);
+    m.position.set(x, y, z);
+    m.castShadow = true;
+    m.receiveShadow = true;
+    g.add(m);
+    return m;
+  };
+  add(body, 0, 0, 0);
+  // The fold: a band down the front, and the rolled edge along the top.
+  add(new T.BoxGeometry(0.05, 0.2, w * 0.98), d / 2 + 0.02, h / 2 - 0.12, 0);
+  const roll = add(new T.CylinderGeometry(0.05, 0.05, w * 0.98, 12), d / 2 - 0.02, h / 2 - 0.005, 0);
+  roll.rotation.x = Math.PI / 2;
+  return g;
 }
 
 /** The props in one place, for the driver. */
@@ -141,36 +164,39 @@ export class Props {
     this.plant = null;
   }
 
-  /** The box on the counter, sliding out as k goes 0 to 1. */
+  /** The bag on the counter, standing on it at y, its front toward -z
+   * (to him at the window), sliding out as k goes 0 to 1. */
   boxAt(x, y, z, k) {
     if (this.boxState === 'carried') return;
     this.boxState = 'counter';
     this.box.visible = k > 0;
-    this.box.position.set(x, y, z - 0.5 + 0.5 * k);
-    this.box.rotation.set(0, 0, 0);
+    this.box.position.set(x, y + BAG.h / 2, z - 0.5 + 0.5 * k);
+    this.box.rotation.set(0, Math.PI / 2, 0);
   }
 
   carryBox(on) {
     this.boxState = on ? 'carried' : 'none';
     this.box.visible = on;
+    this.oneHand = 0;
   }
 
   /** Keep what he holds with him: called after every pose. */
   follow(man, driver) {
     man.torso.updateWorldMatrix(true, false);
     if (this.boxState === 'carried') {
-      if (driver.mode === 'out') {
-        // Both hands, in front of him.
-        this.box.position.set(0.86, 0.78, 0).applyMatrix4(man.torso.matrixWorld);
-        this.box.quaternion.setFromRotationMatrix(man.torso.matrixWorld);
-      } else {
-        // One hand, on the way in; then on his lap.
-        const grip = man.arms[0].grip;
-        grip.updateWorldMatrix(true, false);
-        this.box.position.setFromMatrixPosition(grip.matrixWorld);
-        this.box.quaternion.setFromRotationMatrix(man.torso.matrixWorld);
-        this.box.translateZ(0.24);
-      }
+      // In both hands in front of him while he walks; by the fold in his
+      // left hand on the way in, and then on his lap. From the one to the
+      // other it goes over as his hands do.
+      const want = driver.mode === 'out' ? 0 : 1;
+      const dt = driver.dt ?? 0;
+      this.oneHand = this.oneHand ?? want;
+      this.oneHand += Math.sign(want - this.oneHand) * Math.min(Math.abs(want - this.oneHand), dt / 0.33);
+      const both = new T.Vector3(0.8, 0.8, 0).applyMatrix4(man.torso.matrixWorld);
+      const grip = man.arms[0].grip;
+      grip.updateWorldMatrix(true, false);
+      const one = new T.Vector3(0, -BAG.h / 2 + 0.1, 0.1).applyMatrix4(man.torso.matrixWorld).sub(new T.Vector3().setFromMatrixPosition(man.torso.matrixWorld)).add(new T.Vector3().setFromMatrixPosition(grip.matrixWorld));
+      this.box.position.copy(both).lerp(one, smoothstep(0, 1, this.oneHand));
+      this.box.quaternion.setFromRotationMatrix(man.torso.matrixWorld);
     }
     if (this.flagState === 'held') {
       const grip = man.arms[1].grip;

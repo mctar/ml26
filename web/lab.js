@@ -235,7 +235,7 @@ if (sceneName === 'replay') {
           }
         }
       }
-      if (bad.length) report.bad.push([i, world.driver.mode, bad.join(' ')]);
+      if (bad.length) report.bad.push([i, world.driver.mode, bad.join(' '), +world.driver.t.toFixed(2)]);
     }
     if (world.car.group.visible) {
       for (const w of car.wheels) {

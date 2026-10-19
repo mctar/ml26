@@ -28,7 +28,7 @@ BODY.STAND = BODY.L_THIGH + BODY.L_SHIN + BODY.ANKLE_H - BODY.HIP_Y;
 BODY.REACH = BODY.L_THIGH + BODY.L_SHIN;
 
 const Y = new T.Vector3(0, 1, 0);
-const _a = new T.Vector3(), _d = new T.Vector3(), _e = new T.Vector3(), _u = new T.Vector3(), _x = new T.Vector3(), _y = new T.Vector3(), _z = new T.Vector3();
+const _a = new T.Vector3(), _d = new T.Vector3(), _e = new T.Vector3(), _f = new T.Vector3(), _u = new T.Vector3(), _x = new T.Vector3(), _y = new T.Vector3(), _z = new T.Vector3();
 const _m = new T.Matrix4(), _q = new T.Quaternion(), _q2 = new T.Quaternion();
 
 function lathe(length, radii, mat, steps = 14) {
@@ -46,15 +46,24 @@ function lathe(length, radii, mat, steps = 14) {
  * point and `pole` the direction the middle joint should point, both in
  * the root's parent frame, the target relative to the root's position.
  * The middle joint goes toward the pole; the end reaches the target, or
- * as near as the bones allow.
+ * as near as the bones allow. A pole that lies along the limb says
+ * nothing about where the joint goes, and the least change in it would
+ * swing the joint right round; as it comes near that, `fallback` (another
+ * direction, in the same frame) takes over.
  */
-function solveTwoBone(root, mid, L1, L2, target, pole) {
+function solveTwoBone(root, mid, L1, L2, target, pole, fallback) {
   let D = target.length();
   _d.copy(target).divideScalar(D || 1);
   D = clamp(D, Math.abs(L1 - L2) + 1e-3, L1 + L2 - 1e-4);
   const beta = Math.acos(clamp((L1 * L1 + D * D - L2 * L2) / (2 * L1 * D), -1, 1));
   const gamma = Math.acos(clamp((L2 * L2 + D * D - L1 * L1) / (2 * L2 * D), -1, 1));
   _e.copy(pole).addScaledVector(_d, -pole.dot(_d));
+  const sin = _e.length() / (pole.length() || 1);
+  if (fallback && sin < 0.4) {
+    _f.copy(fallback).addScaledVector(_d, -fallback.dot(_d)).normalize();
+    if (sin > 1e-6) _e.divideScalar(sin * pole.length());
+    _e.multiplyScalar(smoothstep(0.08, 0.4, sin)).addScaledVector(_f, 1 - smoothstep(0.08, 0.4, sin));
+  }
   if (_e.lengthSq() < 1e-8) _e.set(1, 0, 0).addScaledVector(_d, -_d.x);
   _e.normalize();
   const cb = Math.cos(beta), sb = Math.sin(beta);
@@ -233,20 +242,64 @@ export class Astronaut {
     _m.copy(this.pelvis.matrixWorld).invert();
     _a.copy(ankle).applyMatrix4(_m).sub(leg.hip.position);
     const p = pole ? new T.Vector3().copy(pole).transformDirection(_m) : new T.Vector3(1, 0.05, leg.side * 0.12);
-    solveTwoBone(leg.hip, leg.knee, BODY.L_THIGH, BODY.L_SHIN, _a, p);
+    // A knee with no say from its pole goes forward and up.
+    solveTwoBone(leg.hip, leg.knee, BODY.L_THIGH, BODY.L_SHIN, _a, p, new T.Vector3(0.7, 0.7, leg.side * 0.1));
     this.orientEnd(leg.ankle, dir, up);
   }
 
   /** Arm IK: the wrist to a world point, the elbow toward `pole` (world),
    * or back, down and out. */
   setArm(i, wrist, pole = null) {
-    const arm = this.arms[i];
     this.torso.updateWorldMatrix(true, false);
     _m.copy(this.torso.matrixWorld).invert();
-    _a.copy(wrist).applyMatrix4(_m).sub(arm.shoulder.position);
-    const p = pole ? new T.Vector3().copy(pole).transformDirection(_m) : new T.Vector3(-0.6, -0.5, arm.side * 0.9);
-    solveTwoBone(arm.shoulder, arm.elbow, BODY.L_UPPER, BODY.L_FORE, _a, p);
+    const w = wrist.clone().applyMatrix4(_m);
+    const p = pole ? new T.Vector3().copy(pole).transformDirection(_m) : null;
+    this.setArmLocal(i, w, p);
+  }
+
+  /** The same, in the torso's own frame. */
+  setArmLocal(i, w, p = null) {
+    const arm = this.arms[i];
+    _a.copy(w).sub(arm.shoulder.position);
+    p = p || new T.Vector3(-0.6, -0.5, arm.side * 0.9);
+    solveTwoBone(arm.shoulder, arm.elbow, BODY.L_UPPER, BODY.L_FORE, _a, p, new T.Vector3(0, -0.3, arm.side));
     arm.wrist.rotation.set(0, 0, 0);
+  }
+
+  /**
+   * Where an arm spec puts the wrist and which way the elbow goes, in the
+   * torso's frame (the torso already posed): {w, p}. An arm by angles is
+   * posed and read back, so that any two specs can be mixed.
+   */
+  armTarget(i, a) {
+    const arm = this.arms[i];
+    if (a.mix) {
+      // One way of holding the arm handing over to another: the wrist
+      // between the two, lifted a little on the way.
+      const from = this.armTarget(i, a.mix[0]), to = this.armTarget(i, a.mix[1]);
+      const w = from.w.clone().lerp(to.w, a.k);
+      w.y += (a.arc || 0) * Math.sin(Math.PI * a.k);
+      const p = from.p.clone().lerp(to.p, a.k);
+      return { w, p: p.lengthSq() > 1e-8 ? p.normalize() : to.p };
+    }
+    this.torso.updateWorldMatrix(true, false);
+    _m.copy(this.torso.matrixWorld).invert();
+    if (a.fk) {
+      this.armFK(i, a.fk[0], a.fk[1], a.fk[2]);
+      arm.shoulder.updateMatrix();
+      arm.elbow.updateMatrix();
+      const e = new T.Vector3(0, -BODY.L_UPPER, 0).applyMatrix4(arm.shoulder.matrix);
+      const w = new T.Vector3(0, -BODY.L_FORE, 0).applyMatrix4(arm.elbow.matrix).applyMatrix4(arm.shoulder.matrix);
+      // The elbow's way: off the line from the shoulder to the wrist.
+      const s = arm.shoulder.position;
+      const d = w.clone().sub(s).normalize();
+      const p = e.clone().sub(s);
+      p.addScaledVector(d, -p.dot(d));
+      return { w, p: p.lengthSq() > 1e-8 ? p.normalize() : new T.Vector3(-0.6, -0.5, arm.side * 0.9) };
+    }
+    const pole = a.pole ? new T.Vector3().copy(a.pole).transformDirection(_m) : new T.Vector3(-0.6, -0.5, arm.side * 0.9);
+    if (a.local) return { w: a.local.clone(), p: pole };
+    return { w: a.wrist.clone().applyMatrix4(_m), p: pole };
   }
 
   /** An arm by angles: swing forward, out to the side, elbow bend. */
@@ -279,10 +332,15 @@ export class Astronaut {
    *   lean      torso pitch over the pelvis, forward positive; twist
    *   look      head pitch, down positive; headYaw
    *   feet      [{ankle, dir, up, pole?}] left, right
-   *   arms      [{wrist, pole?} | {local} | {fk: [swing, out, bend]}] left, right;
-   *             `local` is a wrist point in the torso's frame
+   *   arms      [{wrist, pole?} | {local} | {fk: [swing, out, bend]} |
+   *             {mix: [arm, arm], k, arc?}] left, right; `local` is a wrist
+   *             point in the torso's frame
+   * With `dt` (seconds since the last pose), hands never jump: where an
+   * arm's target leaps from one frame to the next (a hold taken or let
+   * go, a carry begun, one way of moving handing over to another), the
+   * hand travels there in a third of a second instead.
    */
-  apply(pose) {
+  apply(pose, dt = null) {
     this.root.position.copy(pose.pelvis);
     this.root.quaternion.copy(pose.orient);
     this.pelvis.rotation.set(pose.roll || 0, 0, -(pose.hipPitch || 0));
@@ -293,14 +351,42 @@ export class Astronaut {
       const f = pose.feet[i];
       this.setLeg(i, f.ankle, f.dir, f.up || Y, f.pole || null);
     }
+    this.handsWere = this.handsWere || [null, null];
+    this.handMoves = this.handMoves || [null, null];
     for (let i = 0; i < 2; i++) {
       const a = pose.arms[i];
-      if (a.local) {
-        // A hold relative to the torso (carrying something).
-        this.torso.updateWorldMatrix(true, false);
-        this.setArm(i, a.local.clone().applyMatrix4(this.torso.matrixWorld), a.pole || null);
-      } else if (a.wrist) this.setArm(i, a.wrist, a.pole || null);
-      else this.armFK(i, a.fk[0], a.fk[1], a.fk[2]);
+      if (dt === null) {
+        this.handsWere[i] = null;
+        this.handMoves[i] = null;
+        if (a.fk) this.armFK(i, a.fk[0], a.fk[1], a.fk[2]);
+        else {
+          const r = this.armTarget(i, a);
+          this.setArmLocal(i, r.w, r.p);
+        }
+        continue;
+      }
+      const to = this.armTarget(i, a);
+      const was = this.handsWere[i];
+      let mv = this.handMoves[i];
+      if (was) {
+        const jump = to.w.distanceTo(was.w);
+        if (jump > 0.15 && jump > 6 * dt) {
+          // From wherever the hand is now, mid-move or not.
+          mv = this.handMoves[i] = { from: mv ? mv.now : was, k: 0 };
+        }
+      }
+      this.handsWere[i] = to;
+      let now = to;
+      if (mv) {
+        mv.k = Math.min(1, mv.k + dt / 0.33);
+        const s = smoothstep(0, 1, mv.k);
+        const p = mv.from.p && to.p ? mv.from.p.clone().lerp(to.p, s) : to.p || mv.from.p;
+        now = { w: mv.from.w.clone().lerp(to.w, s), p: p && p.lengthSq() > 1e-8 ? p.normalize() : null };
+        mv.now = now;
+        if (mv.k >= 1) this.handMoves[i] = null;
+      }
+      if (a.fk && !mv) this.armFK(i, a.fk[0], a.fk[1], a.fk[2]);
+      else this.setArmLocal(i, now.w, now.p);
     }
     this.root.updateMatrixWorld(true);
   }
@@ -580,12 +666,26 @@ export class Gait {
         sw.t += dt;
         s = clamp(sw.t / sw.dur, 0, 1);
       }
+      sw.s = s;
       const e = s * s * (3 - 2 * s);
       foot.pos.x = lerp(sw.from.x, sw.to.x, e);
       foot.pos.z = lerp(sw.from.z, sw.to.z, e);
-      // Clearance over whatever is between, and an arc over that.
-      const g = this.ground(foot.pos.x, foot.pos.z);
-      foot.pos.y = Math.max(lerp(sw.from.y, sw.to.y, e), g) + sw.height * Math.pow(Math.sin(Math.PI * s), 0.85);
+      // Clearance over whatever is between, and an arc over that. A kerb
+      // just ahead (or just behind) lifts the foot as it comes near, so it
+      // steps up or down rather than popping onto the top or off it; at
+      // the ends of the swing the foot is where it lifted and lands.
+      const g0 = this.ground(foot.pos.x, foot.pos.z);
+      let g = g0;
+      const dx = sw.to.x - sw.from.x, dz = sw.to.z - sw.from.z, len = Math.hypot(dx, dz);
+      if (len > 1e-3) {
+        for (let r = -0.8; r <= 0.8; r += 0.08) {
+          if (Math.abs(r) < 1e-6) continue;
+          g = Math.max(g, this.ground(foot.pos.x + (dx / len) * r, foot.pos.z + (dz / len) * r) + 0.1 - 1.2 * Math.abs(r));
+        }
+      }
+      g = g0 + (g - g0) * smoothstep(0, 0.2, s) * (1 - smoothstep(0.8, 1, s));
+      const arc = sw.height * Math.pow(Math.sin(Math.PI * s), 0.85);
+      foot.pos.y = Math.max(lerp(sw.from.y, sw.to.y, e) + arc, g + 0.3 * arc);
       foot.yaw = lerp(sw.fromYaw, sw.fromYaw + wrapAngle(sw.toYaw - sw.fromYaw), e);
       foot.pitch = lerp(sw.fromPitch, 0, smoothstep(0, 0.45, s)) - sw.strike * smoothstep(0.55, 1, s);
       if (s >= 1) {
@@ -636,17 +736,31 @@ export class Gait {
       const fd = fwdOf(foot.yaw);
       return foot.planted ? footOn(foot.pos, fd, foot.pitch, this.ground) : footOn(foot.pos, fd, foot.pitch, () => foot.pos.y, this.ground);
     });
-    const gy = this.ground(this.x, this.z);
+    // The ground under him, over a stride: a kerb is stepped up over a
+    // stride rather than jumped in a frame; a slope is unchanged.
+    const fw = fwdOf(this.yaw);
+    let gy = 0;
+    for (let k = -2; k <= 2; k++) gy += this.ground(this.x + fw.x * k * 0.55, this.z + fw.z * k * 0.55) / 5;
     const orient = yawQ(this.yaw);
     const pel = new T.Vector3(this.x, gy + BODY.STAND - 0.12 + this.lift, this.z);
     const hip = new T.Vector3();
     for (let i = 0; i < 2; i++) {
-      if (!this.feet[i].planted) continue;
+      // A foot about to come down a step lower counts as it comes (a step
+      // down is a sink, not a drop): where it is, at the height it lands.
+      const ft = this.feet[i];
+      let ankle = feet[i].ankle, w = 1;
+      if (!ft.planted) {
+        const sw = ft.swing;
+        if (!sw) continue;
+        w = smoothstep(0.4, 1, sw.s ?? 0) * smoothstep(0.15, 0.4, sw.from.y - sw.to.y);
+        if (w <= 0) continue;
+        ankle = new T.Vector3(ft.pos.x, sw.to.y + BODY.ANKLE_H, ft.pos.z);
+      }
       this.man.hipWorld(i, pel, orient, hip);
-      const h = Math.hypot(hip.x - feet[i].ankle.x, hip.z - feet[i].ankle.z);
+      const h = Math.hypot(hip.x - ankle.x, hip.z - ankle.z);
       const R = BODY.REACH * 0.985;
-      const over = hip.y - feet[i].ankle.y - Math.sqrt(Math.max(0, R * R - h * h));
-      if (over > 0) pel.y -= over;
+      const over = hip.y - ankle.y - Math.sqrt(Math.max(0, R * R - h * h));
+      if (over > 0) pel.y -= over * w;
     }
     const lean = this.mode === 'lope' ? 0.1 + 0.025 * speed : 0.04 + 0.04 * speed;
     const pose = {
