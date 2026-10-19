@@ -36,6 +36,87 @@ const MESSAGES_2026 = {
   MACDED: "Well, you've just destroyed the only diner on the moon. What a CLOD.",
 };
 
+/** The tilt messages, which the program draws at the flame's place. */
+const TILTS = ['SIDEM', 'ANGLEM', 'BUMPYM'];
+/** Messages that end a flight in a heap, and what kind of heap. */
+const WRECKS = { DEADM: 'crash', ROCKMS: 'rock', OLDMS: 'oldship', OLDTLT: 'wreck', MACDED: 'dinerdead' };
+/** The program's verdicts, as one word or two for the card. */
+const GRADE = { GREATM: 'Perfect', GOODM: 'Good', ROUGHM: 'A little fast', CRIPM: 'Damaged' };
+
+const fmt = (v, d = 0) => (Number.isFinite(v) ? v : 0).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+const secs = (f, t) => Math.max(0, Math.round((t - f.t) / 1e6));
+
+/**
+ * How each way of finishing reads on the card: a heading, a line of our
+ * own under the program's, the readouts that matter for it, and how long
+ * after the moment itself the card comes up (machine seconds; the program
+ * waits about ten before its next descent, nine after a crash).
+ */
+const ENDINGS = {
+  diner: {
+    after: 0.4,
+    title: () => 'Back from the diner',
+    quip: () => 'Lunch rides home on his lap.',
+    stats: (f) => [touchdown(f), ['Time to land', fmt(secs(f, f.td.t)), 's'], ['Air left', fmt(f.td.air), 'lb']],
+  },
+  flag: {
+    after: 8.6,
+    title: () => 'Flag planted',
+    quip: (f) => (f.dinerGone ? 'No diner on this Moon any more, so a flag it is.' : `The diner was ${fmt(f.toDiner)} ft away. The flag will have to do.`),
+    stats: (f) => [touchdown(f), ['Time to land', fmt(secs(f, f.td.t)), 's'], f.dinerGone ? ['Air left', fmt(f.td.air), 'lb'] : ['To the diner', fmt(f.toDiner), 'ft']],
+  },
+  tipped: {
+    after: 6,
+    title: () => 'Tipped over',
+    quip: (f) => ({
+      SIDEM: `Parallel parking at ${fmt(Math.abs(f.at.hv), 1)} ft/s. The program allows 10.`,
+      ANGLEM: `Down at a ${fmt(Math.abs(f.at.angle))}\u00b0 lean. The program allows 15.`,
+      BUMPYM: `One side came down ${fmt(f.at.step)} ft lower than the other. The program allows less than 48.`,
+    })[f.tilt],
+    stats: (f) => [
+      touchdown(f),
+      {
+        SIDEM: ['Sideways', fmt(Math.abs(f.at.hv), 1), 'ft/s', '10 at most', true],
+        ANGLEM: ['Lean', fmt(Math.abs(f.at.angle)), '\u00b0', '15 at most', true],
+        BUMPYM: ['Ground step', fmt(f.at.step), 'ft', 'under 48', true],
+      }[f.tilt],
+      ['Time to land', fmt(secs(f, f.at.t)), 's'],
+    ],
+  },
+  crash: {
+    after: 5,
+    title: (f) => (f.at.air <= 0 ? 'Out of air' : 'New crater'),
+    quip: (f) =>
+      f.at.air > 0
+        ? `Down at ${fmt(Math.abs(f.at.vv), 1)} ft/s. Under 60 would have counted as a landing.`
+        : f.offEdge
+          ? 'Leaving the map costs all your air. Gravity did the rest.'
+          : `The air ran out at ${fmt(f.airOutAt ?? 0)} ft. Gravity did the rest.`,
+    stats: (f) => [['Impact', fmt(Math.abs(f.at.vv), 1), 'ft/s', 'under 60 lands', true], ['Flight time', fmt(secs(f, f.at.t)), 's'], ['Air left', fmt(f.at.air), 'lb', f.at.air <= 0 ? 'none' : '', f.at.air <= 0]],
+  },
+  rock: { after: 5, title: () => 'Rock meets Roadster', quip: () => 'Small solar system.', stats: (f) => inFlight(f) },
+  oldship: { after: 5, title: () => 'Parking dispute', quip: () => 'That space was taken.', stats: (f) => inFlight(f) },
+  wreck: { after: 5, title: () => 'Same spot, twice', quip: () => 'Lightning never strikes the same place twice. Roadsters do.', stats: (f) => inFlight(f) },
+  dinerdead: { after: 5, title: () => 'Diner closed', quip: () => 'It stays closed until a New Moon.', stats: (f) => inFlight(f) },
+};
+
+function touchdown(f) {
+  return ['Touchdown', fmt(Math.abs(f.td.vv), 1), 'ft/s', GRADE[f.td.msg] || '', f.td.msg === 'CRIPM'];
+}
+
+function inFlight(f) {
+  return [['Speed', fmt(Math.hypot(f.at.vv, f.at.hv), 1), 'ft/s'], ['Flight time', fmt(secs(f, f.at.t)), 's'], ['Air left', fmt(f.at.air), 'lb']];
+}
+
+/** What this Moon has seen, for the card: "2 lunches, 1 flag, 3 crashes". */
+function tallyLine(t) {
+  const part = (n, one, many) => (n ? `${n} ${n === 1 ? one : many}` : '');
+  const parts = [part(t.lunch, 'lunch', 'lunches'), part(t.flag, 'flag', 'flags'), part(t.tipped, 'tip-over', 'tip-overs'), part(t.crash, 'crash', 'crashes'), t.diner ? 'no diner' : ''].filter(Boolean);
+  if (!parts.length) return '';
+  const list = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0];
+  return `This Moon so far: ${list}.`;
+}
+
 class Page {
   constructor() {
     this.view = 'roadster';
@@ -62,7 +143,15 @@ class Page {
     this.lastFrame = 0;
     this.arrival = true;
     this.holds = new Set(); // what is holding the flight: an open sheet, the end card
-    this.flight = null; // this descent: when it began, how it came down, whether he ordered
+    this.flight = null; // this descent: when it began, how it came down, how it ended
+    this.tally = { lunch: 0, flag: 0, tipped: 0, crash: 0, diner: false }; // this Moon's flights
+    this.skipping = false; // through the program's wait before its next descent
+    this.muted = false;
+    try {
+      this.muted = localStorage.getItem('moonlander.muted') === '1';
+    } catch (e) {
+      /* no storage: sound on */
+    }
   }
 
   wallMachine() {
@@ -126,7 +215,7 @@ class Page {
     }
     // The greeting runs fast behind the arrival card; then the machine
     // holds until the card is dismissed; then the game at its pace.
-    const wanted = this.greeting() ? this.fastRate : this.arrival ? 0 : this.userRate;
+    const wanted = this.greeting() || this.skipping ? this.fastRate : this.arrival ? 0 : this.userRate;
     if (wanted !== this.rate) {
       this.originT = this.wallMachine();
       this.originWall = t1;
@@ -274,11 +363,19 @@ class Page {
       }
     }
     const m = messageName(this.engine.symbols, s.sysmes);
-    this.follow(s, m);
-    if (m !== this.lastMessage) {
+    // A tipped car's reason is drawn where the flame was, after the verdict.
+    const fm = messageName(this.engine.symbols, s.flame);
+    const tilt = TILTS.includes(fm) ? fm : null;
+    this.follow(s, m, tilt);
+    if (m !== this.lastMessage || tilt !== this.lastTilt) {
+      const fresh = m !== this.lastMessage;
       this.lastMessage = m;
-      $('message').textContent = m ? MESSAGES_2026[m] : '';
-      if (m && !this.arrival) this.radio.say(m, { urgent: ['DEADM', 'MACDED', 'ROCKMS', 'OLDMS', 'OLDTLT', 'ANGLEJ'].includes(m) });
+      this.lastTilt = tilt;
+      $('message').textContent = [m && MESSAGES_2026[m], tilt && MESSAGES_2026[tilt]].filter(Boolean).join(' ');
+      if (!this.arrival) {
+        if (m && fresh) this.radio.say(m, { urgent: Object.keys(WRECKS).includes(m) });
+        if (tilt) this.radio.say(tilt);
+      }
     }
     if (s.fuel_low && !this.airLowSaid) {
       this.airLowSaid = true;
@@ -300,30 +397,80 @@ class Page {
 
   /**
    * This descent, for the end card: when it began (after the greeting, or
-   * when the program starts again high up), how it came down, and whether
-   * he ordered. When the car has gone from the diner, the card.
+   * when the program starts again high up), how it came down, and how it
+   * ended. A little after the ending, when the program has shown it, the
+   * card; if the program is quicker than that, the card comes anyway.
    */
-  follow(s, m) {
+  follow(s, m, tilt) {
     if (s.t < GAME_START) return;
-    if (!this.flight || s.verdis - this.flight.verdis > 15000) this.flight = { t: s.t, verdis: s.verdis, touchdown: null, ordered: false, ended: false };
+    const fresh = !this.flight || s.verdis - this.flight.verdis > 15000;
+    if (fresh) {
+      const was = this.flight;
+      if (was && was.kind && !was.shown) this.ending(was);
+      this.flight = { t: s.t, verdis: s.verdis, td: null, kind: null, shown: false };
+      this.skipping = false;
+    }
     const f = this.flight;
     f.verdis = s.verdis;
-    if (!f.touchdown && LANDINGS.includes(m) && s.verdis < 450) f.touchdown = { vv: s.vervel / 10, msg: m, t: s.t, air: s.fuel / 10 };
-    if (m === 'ORDER') f.ordered = true;
-    // The program takes the car off the screen once it has climbed away.
-    if (f.ordered && !f.ended && s.shipdp === 0) {
-      f.ended = true;
-      this.ending(f);
+    if (this.skipping && s.t - (this.skipFrom ?? s.t) > 20e6) this.skipping = false;
+    const now = () => ({ t: s.t, vv: s.vervel / 10, hv: s.horvel / 10, angle: s.angle, air: Math.max(0, s.fuel / 10), hordis: s.hordis });
+    if (s.fuel <= 0 && f.airOutAt === undefined) f.airOutAt = Math.max(0, this.alt ?? s.radary);
+    if (!f.td && LANDINGS.includes(m) && s.verdis < 450) f.td = { ...now(), msg: m };
+    if (f.kind) {
+      if (!f.shown && s.t >= f.at.t + ENDINGS[f.kind].after * 1e6) this.ending(f);
+      return;
     }
+    const end = (kind, extra = {}) => {
+      f.kind = kind;
+      f.at = { ...now(), ...extra };
+    };
+    if (m === 'ORDER') f.ordered = true;
+    if (['LFTMSG', 'RGTMSG', 'TOPMSG'].includes(m)) f.offEdge = m;
+    if (f.ordered && s.shipdp === 0) end('diner'); // the car has climbed away
+    else if (m === 'MANMSG') {
+      end('flag');
+      const diner = this.roadster.dinerX;
+      f.dinerGone = !(s.diner & 1) || diner == null;
+      f.toDiner = diner == null ? 0 : Math.round(Math.abs((f.td ? f.td.hordis : s.hordis) - diner));
+    } else if (tilt) {
+      const ter = this.roadster.terrain;
+      end('tipped', { step: ter ? Math.abs((ter[s.indexl + 1] ?? 0) - (ter[s.indexl] ?? 0)) : 0 });
+      f.tilt = tilt;
+    } else if (WRECKS[m]) end(WRECKS[m]);
   }
 
-  /** The end of a visit to the diner: how it went, and what next. */
+  /** The end of a flight: how it went, what this Moon has seen, what next. */
   ending(f) {
-    const td = f.touchdown;
-    $('end-vv').textContent = td ? Math.abs(td.vv).toFixed(1) : '0';
-    $('end-grade').textContent = td ? MESSAGES_2026[td.msg] : '';
-    $('end-time').textContent = td ? Math.round((td.t - f.t) / 1e6).toLocaleString('en-US') : '0';
-    $('end-air').textContent = td ? Math.max(0, Math.round(td.air)).toLocaleString('en-US') : '0';
+    f.shown = true;
+    const e = ENDINGS[f.kind];
+    if (!f.td) f.td = { ...f.at, msg: null };
+    const t = this.tally;
+    if (f.kind === 'diner') t.lunch++;
+    else if (f.kind === 'flag') t.flag++;
+    else if (f.kind === 'tipped') t.tipped++;
+    else t.crash++;
+    if (f.kind === 'dinerdead') t.diner = true;
+    const card = $('ending');
+    card.dataset.kind = f.kind;
+    $('ending-title').textContent = e.title(f);
+    const line = { diner: 'ORDER', flag: 'MANMSG' }[f.kind];
+    $('ending-line').textContent = line ? MESSAGES_2026[line] : f.kind === 'tipped' ? [f.td.msg && MESSAGES_2026[f.td.msg], MESSAGES_2026[f.tilt]].filter(Boolean).join(' ') : MESSAGES_2026[Object.keys(WRECKS).find((k) => WRECKS[k] === f.kind)];
+    $('ending-quip').textContent = e.quip(f);
+    const box = $('ending-stats');
+    box.textContent = '';
+    for (const st of e.stats(f)) {
+      if (!st) continue;
+      const [label, value, unit, note, warn] = st;
+      const r = document.createElement('div');
+      r.className = 'readout' + (warn ? ' warn' : '');
+      r.innerHTML = '<div class="label"></div><div class="value"><span></span><span class="unit"></span></div><div class="note"></div>';
+      r.querySelector('.label').textContent = label;
+      r.querySelector('.value span').textContent = value;
+      r.querySelector('.unit').textContent = unit;
+      r.querySelector('.note').textContent = note || '';
+      box.appendChild(r);
+    }
+    $('ending-tally').textContent = tallyLine(t);
     $('end-share').textContent = 'Copy replay link';
     this.show('ending');
   }
@@ -370,7 +517,8 @@ class Page {
   /** Keys while something is over the flight: close it, or the card's own. */
   overlayKey(top, ev) {
     if (ev.code === 'Escape') {
-      this.hide(top);
+      if (top === 'ending') this.playAgain();
+      else this.hide(top);
       ev.preventDefault();
       return;
     }
@@ -388,15 +536,39 @@ class Page {
     if (top === 'guide' && (ev.code === 'KeyH' || ev.key === '?')) this.hide('guide');
     else if (top === 'ending') {
       if (ev.code === 'KeyS') this.copyReplay($('end-share'));
-      else if (ev.code === 'KeyR') this.playAgain();
+      else if (ev.code === 'KeyN' || ev.code === 'KeyR') this.newMoon();
       else if (ev.code === 'KeyH' || ev.key === '?') this.show('guide');
+      else if (ev.code === 'KeyM') this.mute(!this.muted);
     }
   }
 
-  /** From the end card: a new flight, from the top. */
+  /** From the end card: the next descent on this Moon, which keeps its
+   * flags, wrecks and craters, straight away (the program's own wait is run
+   * through at speed). */
   playAgain() {
     this.hide('ending', false);
+    this.skipping = true;
+    this.skipFrom = this.state?.t;
+  }
+
+  /** From the end card: a clean Moon, the program loaded afresh. */
+  newMoon() {
+    this.hide('ending', false);
     this.restart();
+  }
+
+  /** Sound off or on, remembered in this browser. */
+  mute(on) {
+    this.muted = on;
+    this.sound.mute(on);
+    const b = $('sound-toggle');
+    b.textContent = on ? 'Unmute' : 'Mute';
+    b.setAttribute('aria-label', on ? 'Turn sound on' : 'Turn sound off');
+    try {
+      localStorage.setItem('moonlander.muted', on ? '1' : '0');
+    } catch (e) {
+      /* remembered for this visit only */
+    }
   }
 
   /** The link that replays this flight: in the address bar, and copied
@@ -490,6 +662,8 @@ class Page {
       this.replayAt = 0;
       this.wanted = undefined;
       this.flight = null;
+      this.tally = { lunch: 0, flag: 0, tipped: 0, crash: 0, diner: false };
+      this.skipping = false;
       this.altWas = undefined;
       this.altPrev = undefined;
       this.phosphor.clear();
@@ -611,6 +785,9 @@ class Page {
     $('guide-toggle').addEventListener('click', () => this.show('guide'));
     $('guide-close').addEventListener('click', () => this.hide('guide'));
     $('end-again').addEventListener('click', () => this.playAgain());
+    $('end-new').addEventListener('click', () => this.newMoon());
+    $('sound-toggle').addEventListener('click', () => this.mute(!this.muted));
+    this.mute(this.muted);
     $('end-share').addEventListener('click', (ev) => this.copyReplay(ev.currentTarget));
     $('end-guide').addEventListener('click', () => this.show('guide'));
     // A click on a sheet's backdrop, outside its text, closes it.
@@ -664,6 +841,9 @@ class Page {
           break;
         case 'KeyH':
           this.show('guide');
+          break;
+        case 'KeyM':
+          this.mute(!this.muted);
           break;
         default:
           return;

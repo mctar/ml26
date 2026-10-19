@@ -23,8 +23,11 @@ Live at [moonlander.btrbot.com](https://moonlander.btrbot.com).
   table, the diner, what earlier games left behind, the camera, with the
   pieces from `world/`); `sound.js` is what the driver hears; `main.js` paces the
   machine against the clock, keeps the two views, turns the controls into
-  the pen, and holds the machine still while the guide, About or the card
-  at the end of a visit to the diner is open. `vendor/three.js` is a bundled subset of three.js, built
+  the pen, and holds the machine still while the guide, About or an end
+  card is open. Every way a flight can end (lunch at the diner, a flag, a
+  tip-over, a crater, a boulder, someone else's car, the diner itself) gets
+  its own card; Play again runs through the program's own wait at speed
+  and keeps the Moon, with everything earlier flights left on it. `vendor/three.js` is a bundled subset of three.js, built
   from `vendor/three-entry.js` with esbuild.
 - `web/world/`: the pieces of the 2026 view. `car.js` is the Roadster,
   lofted from a few profiles, on springs that keep it on the ground;
@@ -50,7 +53,8 @@ Live at [moonlander.btrbot.com](https://moonlander.btrbot.com).
 
 Drag the thrust bar or use the up and down keys; the arrows turn, Shift
 for the big ones. V shows the 1973 tube, R starts again, S copies a replay
-link, A hands over to the autopilot, H (or ?) opens the pilot's guide.
+link, A hands over to the autopilot, M turns the sound off and on, H (or
+?) opens the pilot's guide.
 Query parameters: `?view=1973` opens
 on the tube, `?pilot=N` starts the autopilot (0 land, 1 the diner, 2 a
 flag, 7 climb away, 10 into the diner), `?rate=N` runs the machine at N

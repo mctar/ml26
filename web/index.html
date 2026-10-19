@@ -101,14 +101,22 @@
   #ending { position: absolute; inset: 0; z-index: 4; display: grid; place-items: center; background: rgba(0,0,0,0.74); padding: 24px; }
   #ending .card { text-align: center; max-width: 560px; }
   #ending h1 { font-size: 13px; letter-spacing: 0.3em; text-transform: uppercase; font-weight: 500; color: var(--dim); margin: 0 0 14px; }
-  #ending .line { font-size: 19px; line-height: 1.4; letter-spacing: 0.04em; color: var(--fg); margin: 0 0 30px; }
-  #ending .stats { display: flex; justify-content: center; gap: 22px 36px; flex-wrap: wrap; margin: 0 0 34px; text-align: left; }
+  #ending .line { font-size: 19px; line-height: 1.4; letter-spacing: 0.04em; color: var(--fg); margin: 0 0 10px; }
+  #ending .quip { font-size: 15px; line-height: 1.45; color: #b9bab4; margin: 0 0 30px; }
+  #ending[data-kind="crash"] h1, #ending[data-kind="rock"] h1, #ending[data-kind="oldship"] h1, #ending[data-kind="wreck"] h1, #ending[data-kind="dinerdead"] h1, #ending[data-kind="tipped"] h1 { color: var(--warn); }
+  #ending .keep { font-size: 12px; line-height: 1.5; color: var(--dim); max-width: 380px; margin: 14px auto 0; }
+  #ending .tally { font-size: 13px; color: #c4c5bf; margin: -8px 0 26px; }
+  #ending .tally:empty { display: none; }
+  #ending .links { display: flex; justify-content: center; gap: 18px; margin-top: 18px; }
+  #ending .links button { background: none; border: 0; padding: 4px 0; font-size: 13px; color: var(--dim); text-decoration: underline; text-underline-offset: 3px; border-radius: 0; }
+  #ending .links button:hover { color: var(--fg); }
+  #ending .stats { display: flex; justify-content: center; gap: 22px 36px; flex-wrap: wrap; margin: 0 0 26px; text-align: left; }
   #ending .stats .note { font-size: 12px; color: var(--dim); margin-top: 2px; }
   #ending .actions { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
   #ending button { font: 14px var(--sans); padding: 11px 18px; border-radius: 8px; cursor: pointer; border: 1px solid var(--faint); background: rgba(0,0,0,0.5); color: var(--fg); }
   #ending button.primary { background: var(--fg); color: #000; border-color: var(--fg); font-weight: 500; }
   #ending button:hover { border-color: var(--dim); }
-  #ending .hint { margin: 18px 0 0; font-size: 12px; color: var(--dim); }
+  #ending .hint { margin: 14px 0 0; font-size: 12px; color: var(--faint); }
   @media (hover: none) { #ending .hint { display: none; } }
   @media (prefers-reduced-motion: no-preference) {
     #ending:not(.hidden) .card { animation: rise 0.7s ease-out both; }
@@ -154,6 +162,7 @@
   <div id="topright">
     <span id="status"></span>
     <button id="view-toggle" title="V">1973 view</button>
+    <button id="sound-toggle" title="M">Mute</button>
     <button id="guide-toggle" title="H" aria-haspopup="dialog">Guide</button>
     <button id="about-toggle" aria-haspopup="dialog">About</button>
   </div>
@@ -266,30 +275,33 @@
     </ul>
 
     <h2>After you land</h2>
-    <p>If the diner is on the close-up when you touch down, the driver climbs out, walks to the window, orders <span class="prog">TWO CHEESEBURGERS AND A BIG MAC TO GO.</span>, carries the bag back and climbs in, and the car lifts off with a little more air. Anywhere else he plants a flag, and it stays for your next landings until you start again.</p>
+    <p>If the diner is on the close-up when you touch down, the driver climbs out, walks to the window, orders <span class="prog">TWO CHEESEBURGERS AND A BIG MAC TO GO.</span>, carries the bag back and climbs in, and the car lifts off with a little more air. Anywhere else he plants a flag.</p>
+    <p>However a flight ends, a card sums it up. Play again keeps the same Moon, and the Moon remembers: your flags, parked cars, wrecks and craters are there on the next descent, waiting to be flown into. New Moon starts clean, with the diner back if you knocked it down.</p>
 
     <h2>Keys</h2>
-    <p><kbd>V</kbd> switches between the Roadster and the 1973 tube, where the mouse is the light pen: hold it on the bar for thrust, on the arrows to turn. <kbd>R</kbd> starts again. <kbd>S</kbd> copies a link that replays this flight. <kbd>A</kbd> hands the controls to the autopilot and back. <kbd>H</kbd> opens this guide and <kbd>Esc</kbd> closes it.</p>
+    <p><kbd>V</kbd> switches between the Roadster and the 1973 tube, where the mouse is the light pen: hold it on the bar for thrust, on the arrows to turn. <kbd>R</kbd> starts again. <kbd>S</kbd> copies a link that replays this flight. <kbd>A</kbd> hands the controls to the autopilot and back. <kbd>M</kbd> turns the sound off and on. <kbd>H</kbd> opens this guide and <kbd>Esc</kbd> closes it.</p>
 
     <h2>Watch it done</h2>
     <p><a href="?pilot=1">The autopilot lands at the diner.</a> <a href="?pilot=2">The autopilot lands in the open</a> and plants a flag.</p>
   </article>
 </div>
-<div id="ending" class="hidden" role="dialog" aria-modal="true" aria-labelledby="ending-title">
+<div id="ending" class="hidden" role="dialog" aria-modal="true" aria-labelledby="ending-title" aria-describedby="ending-line ending-quip">
   <div class="card">
     <h1 id="ending-title">Back from the diner</h1>
     <p class="line" id="ending-line">TWO CHEESEBURGERS AND A BIG MAC TO GO.</p>
-    <div class="stats">
-      <div class="readout"><div class="label">Touchdown</div><div class="value"><span id="end-vv">0</span><span class="unit">ft/s</span></div><div class="note" id="end-grade"></div></div>
-      <div class="readout"><div class="label">Time to land</div><div class="value"><span id="end-time">0</span><span class="unit">s</span></div></div>
-      <div class="readout"><div class="label">Air left</div><div class="value"><span id="end-air">0</span><span class="unit">lb</span></div></div>
-    </div>
+    <p class="quip" id="ending-quip"></p>
+    <div class="stats" id="ending-stats"></div>
+    <p class="tally" id="ending-tally"></p>
     <div class="actions">
       <button class="primary" id="end-again">Play again</button>
+      <button id="end-new">New Moon</button>
+    </div>
+    <p class="keep">Play again keeps this Moon: your flags, cars and craters stay where you left them. New Moon starts clean.</p>
+    <div class="links">
       <button id="end-share">Copy replay link</button>
       <button id="end-guide">Guide</button>
     </div>
-    <p class="hint">Enter plays again. S copies the link.</p>
+    <p class="hint">Enter plays again. N for a new Moon, S copies the link.</p>
   </div>
 </div>
 <script type="module" src="./main.js"></script>

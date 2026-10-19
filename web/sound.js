@@ -10,6 +10,15 @@ export class Sound {
     this.bells = 0;
   }
 
+  /** Everything silent (the radio too), or not; the sounds still run. */
+  mute(on) {
+    this.muted = on;
+    if (!this.master) return;
+    const t = this.ac.currentTime;
+    this.master.gain.cancelScheduledValues(t);
+    this.master.gain.setTargetAtTime(on ? 0 : 0.8, t, 0.04);
+  }
+
   /** Hold every sound, the radio's too, where it is; or let it go on. */
   pause(on) {
     this.paused = on;
@@ -28,7 +37,7 @@ export class Sound {
     if (!AC) return;
     const ac = (this.ac = new AC());
     this.master = ac.createGain();
-    this.master.gain.value = 0.8;
+    this.master.gain.value = this.muted ? 0 : 0.8;
     this.master.connect(ac.destination);
 
     // White noise, two seconds, looped: the raw material.
