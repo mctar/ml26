@@ -263,6 +263,8 @@ fn plan(n: i32) -> Option<Plan> {
         10 => Plan::IntoMcDonalds,
         11 => Plan::Spin,
         12 => Plan::Brake,
+        // 1000 and up: come down at terrain index n - 1000, whatever is there.
+        n if (1000..1000 + 911).contains(&n) => Plan::LandAt { index: (n - 1000) as i16 },
         _ => return None,
     })
 }

@@ -54,10 +54,13 @@ Live at [moonlander.btrbot.com](https://moonlander.btrbot.com).
 Drag the thrust bar or use the up and down keys; the arrows turn, Shift
 for the big ones. V shows the 1973 tube, R starts again, S copies a replay
 link, A hands over to the autopilot, M turns the sound off and on, H (or
-?) opens the pilot's guide.
+?) opens the pilot's guide. D, which the page does not mention, opens the
+demo flights: pick an ending and the autopilot flies it on a fresh Moon,
+fast from the heights and near real time at the ground.
 Query parameters: `?view=1973` opens
 on the tube, `?pilot=N` starts the autopilot (0 land, 1 the diner, 2 a
-flag, 7 climb away, 10 into the diner), `?rate=N` runs the machine at N
+flag, 7 climb away, 10 into the diner, 1000 plus a terrain index to come
+down there, whatever is there), `?rate=N` runs the machine at N
 times real time, `?debug` shows timings, `?norender` skips drawing (for
 tests).
 

@@ -21,7 +21,27 @@ const GAME_START = 30.6e6;
 /** The program's verdicts on a landing. */
 const LANDINGS = ['GREATM', 'GOODM', 'ROUGHM', 'CRIPM'];
 /** The layers that can sit over the flight, topmost first. */
-const OVERLAYS = ['guide', 'about', 'ending'];
+const OVERLAYS = ['guide', 'about', 'demo', 'ending'];
+/**
+ * The demo flights, behind D: the autopilot flies each to one way of
+ * ending, on a fresh Moon, quickly where nothing much happens. A plan is
+ * the engine's autopilot number (engine/src/lib.rs), -1 for nobody at the
+ * controls, or 'here' for the place the last flight came down.
+ */
+const DEMOS = [
+  { name: 'Lunch at the diner', what: 'Orders at the window, carries the bag back, lifts off.', plans: [1] },
+  { name: 'A flag in the open', what: 'A gentle landing well away from the diner.', plans: [2] },
+  { name: 'A little fast', what: 'Down at about 20 ft/s, and still walks away.', plans: [3] },
+  { name: 'Damage done', what: 'Down at over 30 ft/s. The car minds.', plans: [4] },
+  { name: 'Sideways', what: 'Touches down sliding, and over it goes.', plans: [5] },
+  { name: 'Too steep', what: 'Comes down across a step in the ground.', plans: [9] },
+  { name: 'Hands off', what: 'Nobody touches anything.', plans: [-1] },
+  { name: 'Straight up', what: 'Full thrust until the program loses sight of the car.', plans: [7] },
+  { name: 'Into the diner', what: 'Straight onto the roof.', plans: [10] },
+  { name: 'Into a boulder', what: 'Picks a rock and lands on it.', plans: [1650] },
+  { name: 'Parking dispute', what: 'Plants a flag, then comes back to the same spot.', plans: [2, 'here'] },
+  { name: 'Same spot, twice', what: 'Tips over, then comes back to the same spot.', plans: [5, 'here'] },
+];
 
 const FIELDS = ['pen_x', 'pen_y', 'pen_down', 'throttle', 'turning', 'choice', 'slot', 'pilot', 'stop'];
 
@@ -146,6 +166,7 @@ class Page {
     this.flight = null; // this descent: when it began, how it came down, how it ended
     this.tally = { lunch: 0, flag: 0, tipped: 0, crash: 0, diner: false }; // this Moon's flights
     this.skipping = false; // through the program's wait before its next descent
+    this.demo = null; // a demo flight under way: { ...DEMOS[i], step }
     this.muted = false;
     try {
       this.muted = localStorage.getItem('moonlander.muted') === '1';
@@ -215,7 +236,7 @@ class Page {
     }
     // The greeting runs fast behind the arrival card; then the machine
     // holds until the card is dismissed; then the game at its pace.
-    const wanted = this.greeting() || this.skipping ? this.fastRate : this.arrival ? 0 : this.userRate;
+    const wanted = this.greeting() || this.skipping ? this.fastRate : this.arrival ? 0 : this.demo ? this.demoPace() : this.userRate;
     if (wanted !== this.rate) {
       this.originT = this.wallMachine();
       this.originWall = t1;
@@ -413,7 +434,7 @@ class Page {
     const f = this.flight;
     f.verdis = s.verdis;
     if (this.skipping && s.t - (this.skipFrom ?? s.t) > 20e6) this.skipping = false;
-    const now = () => ({ t: s.t, vv: s.vervel / 10, hv: s.horvel / 10, angle: s.angle, air: Math.max(0, s.fuel / 10), hordis: s.hordis });
+    const now = () => ({ t: s.t, vv: s.vervel / 10, hv: s.horvel / 10, angle: s.angle, air: Math.max(0, s.fuel / 10), hordis: s.hordis, indexl: s.indexl });
     if (s.fuel <= 0 && f.airOutAt === undefined) f.airOutAt = Math.max(0, this.alt ?? s.radary);
     if (!f.td && LANDINGS.includes(m) && s.verdis < 450) f.td = { ...now(), msg: m };
     if (f.kind) {
@@ -442,6 +463,15 @@ class Page {
   /** The end of a flight: how it went, what this Moon has seen, what next. */
   ending(f) {
     f.shown = true;
+    const d = this.demo;
+    if (d && d.step < d.plans.length - 1) {
+      // A demo in two parts: on to the next flight, card unseen.
+      d.step++;
+      this.input('pilot', this.demoPlan(d, f));
+      this.skipping = true;
+      this.skipFrom = this.state?.t;
+      return;
+    }
     const e = ENDINGS[f.kind];
     if (!f.td) f.td = { ...f.at, msg: null };
     const t = this.tally;
@@ -472,6 +502,10 @@ class Page {
     }
     $('ending-tally').textContent = tallyLine(t);
     $('end-share').textContent = 'Copy replay link';
+    // In a demo the card offers the demo again, another, or the controls.
+    card.classList.toggle('demo', !!d);
+    $('end-again').textContent = d ? 'Run it again' : 'Play again';
+    $('end-new').textContent = d ? 'Fly yourself' : 'New Moon';
     this.show('ending');
   }
 
@@ -486,12 +520,12 @@ class Page {
   show(id) {
     const el = $(id);
     if (!el.classList.contains('hidden')) return;
-    for (const other of ['guide', 'about']) if (other !== id) this.hide(other, false);
+    for (const other of ['guide', 'about', 'demo']) if (other !== id) this.hide(other, false);
     if (!this.overlay()) this.returnFocus = document.activeElement;
     el.classList.remove('hidden');
     el.scrollTop = 0;
     this.hold(id, true);
-    (el.querySelector('.primary, .close') || el).focus({ preventScroll: true });
+    (el.querySelector(id === 'demo' ? '#demo-list button' : '.primary, .close') || el).focus({ preventScroll: true });
   }
 
   hide(id, refocus = true) {
@@ -522,6 +556,18 @@ class Page {
       ev.preventDefault();
       return;
     }
+    if (top === 'demo') {
+      const items = [...document.querySelectorAll('#demo-list button')];
+      const i = items.indexOf(document.activeElement);
+      if (ev.code === 'ArrowDown' || ev.code === 'ArrowUp') {
+        items[(i + (ev.code === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus();
+        ev.preventDefault();
+      } else if (/^Digit[1-9]$/.test(ev.code) && items[Number(ev.code.slice(-1)) - 1]) {
+        this.startDemo(Number(ev.code.slice(-1)) - 1);
+        ev.preventDefault();
+      } else if (ev.code === 'KeyD' && !ev.repeat) this.hide('demo');
+      return;
+    }
     if (ev.code === 'Tab') {
       // Round the layer's own controls, not out to the page under it.
       const all = [...$(top).querySelectorAll('button, a[href]')].filter((b) => b.offsetParent !== null);
@@ -537,6 +583,7 @@ class Page {
     else if (top === 'ending') {
       if (ev.code === 'KeyS') this.copyReplay($('end-share'));
       else if (ev.code === 'KeyN' || ev.code === 'KeyR') this.newMoon();
+      else if (ev.code === 'KeyD') this.show('demo');
       else if (ev.code === 'KeyH' || ev.key === '?') this.show('guide');
       else if (ev.code === 'KeyM') this.mute(!this.muted);
     }
@@ -546,6 +593,7 @@ class Page {
    * flags, wrecks and craters, straight away (the program's own wait is run
    * through at speed). */
   playAgain() {
+    if (this.demo) return this.startDemo(this.demo.index);
     this.hide('ending', false);
     this.skipping = true;
     this.skipFrom = this.state?.t;
@@ -554,7 +602,42 @@ class Page {
   /** From the end card: a clean Moon, the program loaded afresh. */
   newMoon() {
     this.hide('ending', false);
+    if (this.demo) this.stopDemo();
     this.restart();
+  }
+
+  /** A demo flight: a fresh Moon, the autopilot on the demo's plan. */
+  startDemo(index) {
+    this.hide('demo', false);
+    this.hide('ending', false);
+    this.demo = { ...DEMOS[index], index, step: 0 };
+    this.wake();
+    this.restart();
+  }
+
+  /** The demo flight is the person's again. */
+  stopDemo() {
+    if (!this.demo) return;
+    this.demo = null;
+    this.input('pilot', -1);
+    $('coach').classList.remove('demo');
+    $('coach').style.opacity = '0';
+  }
+
+  /** The engine's plan for this step of a demo. */
+  demoPlan(d, last = null) {
+    const p = d.plans[d.step];
+    if (p === 'here') return 1000 + (last?.td?.indexl ?? last?.at?.indexl ?? 0);
+    return p;
+  }
+
+  /** How fast a demo runs: briskly down from the heights, near real time
+   * for the landing, a little quicker for what follows. */
+  demoPace() {
+    const s = this.state;
+    if (!s || s.verdis > 450) return 16;
+    const f = this.flight;
+    return f && (f.td || f.kind) ? 3 : 2;
   }
 
   /** Sound off or on, remembered in this browser. */
@@ -675,6 +758,16 @@ class Page {
         $('arrival').style.opacity = '1';
       }
       this.arrivalSince = performance.now();
+      if (this.demo) {
+        this.demo.step = 0;
+        const plan = this.demoPlan(this.demo);
+        this.pending.push(['pilot', plan]);
+        $('arrival-note').textContent = `Demo: ${this.demo.name.toLowerCase()}`;
+        const c = $('coach');
+        c.textContent = `Demo: ${this.demo.name.toLowerCase()}. Esc to take over.`;
+        c.classList.add('demo');
+        c.style.opacity = '1';
+      }
       const code = await this.engine.run();
       if (code !== 0) {
         $('status').textContent = ['', 'HALTED', 'BUS ERROR', 'CONTROL LEFT THE PROGRAM'][code] || `STOPPED (${code})`;
@@ -785,13 +878,27 @@ class Page {
     $('guide-toggle').addEventListener('click', () => this.show('guide'));
     $('guide-close').addEventListener('click', () => this.hide('guide'));
     $('end-again').addEventListener('click', () => this.playAgain());
+    $('end-demo').addEventListener('click', () => this.show('demo'));
+    $('demo-close').addEventListener('click', () => this.hide('demo'));
+    const list = $('demo-list');
+    DEMOS.forEach((d, i) => {
+      const li = document.createElement('li');
+      const b = document.createElement('button');
+      b.innerHTML = '<span class="k"></span><span class="n"></span><span class="w"></span>';
+      b.querySelector('.k').textContent = i < 9 ? String(i + 1) : '';
+      b.querySelector('.n').textContent = d.name;
+      b.querySelector('.w').textContent = d.what;
+      b.addEventListener('click', () => this.startDemo(i));
+      li.appendChild(b);
+      list.appendChild(li);
+    });
     $('end-new').addEventListener('click', () => this.newMoon());
     $('sound-toggle').addEventListener('click', () => this.mute(!this.muted));
     this.mute(this.muted);
     $('end-share').addEventListener('click', (ev) => this.copyReplay(ev.currentTarget));
     $('end-guide').addEventListener('click', () => this.show('guide'));
     // A click on a sheet's backdrop, outside its text, closes it.
-    for (const id of ['guide', 'about']) $(id).addEventListener('click', (ev) => {
+    for (const id of ['guide', 'about', 'demo']) $(id).addEventListener('click', (ev) => {
       if (ev.target === ev.currentTarget) this.hide(id);
     });
     $('arrival').addEventListener('click', () => this.wake());
@@ -828,7 +935,15 @@ class Page {
           this.input('slot', Number(ev.code.slice(-1)) - 1);
           break;
         case 'KeyA':
-          this.input('pilot', this.engine.getInput('pilot') === 0 ? -1 : 0);
+          if (this.demo) this.stopDemo();
+          else this.input('pilot', this.engine.getInput('pilot') === 0 ? -1 : 0);
+          break;
+        case 'KeyD':
+          this.show('demo');
+          break;
+        case 'Escape':
+          if (!this.demo) return;
+          this.stopDemo();
           break;
         case 'KeyV':
           this.setView(this.view === 'tube' ? 'roadster' : 'tube');
