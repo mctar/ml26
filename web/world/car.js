@@ -596,7 +596,7 @@ export class Car {
    * @param {(x:number)=>number} ground  terrain height at x on the flight plane
    * @param {number} dt     seconds
    */
-  place(x, y, angle, ground, dt, scale = 1) {
+  place(x, y, angle, ground, dt, scale = 1, vy = null) {
     const th = -T.MathUtils.degToRad(angle);
     const c = Math.cos(th), s = Math.sin(th);
     const W = (lx, ly) => [x + (lx * c - ly * s) * scale, y + (lx * s + ly * c) * scale];
@@ -618,22 +618,27 @@ export class Car {
     }
     const ts = need.map((r) => r - lift / (c * scale || 1));
     const contact = ts.some((t) => t > -CAR.DROOP);
-    // Touchdown: the body keeps some of its speed into the springs.
+    // Touchdown: the body keeps some of its speed into the springs. The
+    // speed is the program's when it is given, else what the motion shows.
     const by = y + lift;
     if (dt > 0) {
-      if (this.lastBy !== undefined) {
-        const v = (by - this.lastBy) / dt;
-        if (this.airborne) this.vAir = v;
+      if (this.airborne) {
+        if (vy !== null) this.vAir = vy;
+        else if (this.lastBy !== undefined) this.vAir = (by - this.lastBy) / dt;
       }
-      if (contact && this.airborne && this.vAir < 0) this.heaveV += clamp(this.vAir, -40, 0) * 0.35;
+      if (contact && this.airborne && this.vAir < 0) this.heaveV += clamp(this.vAir, -30, 0) * 0.35;
     }
     this.lastBy = by;
     this.airborne = !contact;
     this.lift = lift;
-    if (dt > 0) {
-      const k = 120, damp = 9;
-      this.heaveV += (-k * this.heave - damp * this.heaveV) * dt;
-      this.heave += this.heaveV * dt;
+    // The springs, in small steps whatever the frame (a stiff spring taken
+    // in one long step blows up), and not for more than a quarter second.
+    const span = Math.min(Math.max(dt, 0), 0.25);
+    const n = Math.ceil(span / (1 / 240));
+    const h = n ? span / n : 0;
+    for (let i = 0; i < n; i++) {
+      this.heaveV += (-120 * this.heave - 9 * this.heaveV) * h;
+      this.heave += this.heaveV * h;
     }
     this.group.position.set(x, by, 0);
     this.group.rotation.set(0, 0, th);
@@ -648,8 +653,10 @@ export class Car {
         w.tv = 0;
         w.contact = true;
       } else {
-        w.tv += (-(w.t + CAR.DROOP) * 90 - w.tv * 12) * dt;
-        w.t = clamp(w.t + w.tv * dt, -CAR.DROOP, CAR.BUMP);
+        for (let k = 0; k < n; k++) {
+          w.tv += (-(w.t + CAR.DROOP) * 90 - w.tv * 12) * h;
+          w.t = clamp(w.t + w.tv * h, -CAR.DROOP, CAR.BUMP);
+        }
         w.contact = false;
       }
       maxT = Math.max(maxT, w.t);

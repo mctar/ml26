@@ -47,7 +47,9 @@ void main() {
   vec3 p = mix(tail, head, corner.x) + side * corner.y * size;
   gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
   float u = age / aLife.y;
-  vFade = smoothstep(0.0, 0.06, u) * (1.0 - smoothstep(0.7, 1.0, u));
+  // Gone before it reaches the lens: close up a grain is a blur, not a streak.
+  float near = smoothstep(5.0, 22.0, length(cameraPosition - head));
+  vFade = smoothstep(0.0, 0.06, u) * (1.0 - smoothstep(0.7, 1.0, u)) * near;
   vAcross = corner.y;
   vAlong = corner.x;
   vShade = aShade;
@@ -187,11 +189,11 @@ export class DustSheet {
           float run = r - uTime * 140.0;
           float s1 = n(vec2(a * 300.0, run * 0.05));
           float s2 = n(vec2(a * 700.0 + 7.0, run * 0.12));
-          float patch = n(vec2(a * 14.0 + 3.0, run * 0.012));
-          float streak = 0.25 + 0.75 * smoothstep(0.4, 0.95, s1 * 0.55 + s2 * 0.45);
-          float reach = 18.0 + 50.0 * uStrength;
+          float clump = n(vec2(a * 14.0 + 3.0, run * 0.012));
+          float streak = 0.55 + 0.45 * smoothstep(0.4, 0.95, s1 * 0.55 + s2 * 0.45);
+          float reach = 10.0 + 22.0 * uStrength;
           float k = smoothstep(uInner * 0.7, uInner * 1.8, r) * (1.0 - smoothstep(reach * 0.3, reach, r));
-          float alpha = uStrength * 0.32 * k * streak * (0.35 + 0.65 * patch);
+          float alpha = uStrength * 0.11 * k * streak * (0.5 + 0.5 * clump);
           if (alpha < 0.003) discard;
           gl_FragColor = vec4(vec3(1.05, 1.0, 0.93), alpha);
         }`,

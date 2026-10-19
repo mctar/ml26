@@ -58,7 +58,7 @@ export const EXIT = [
     // Turned to the side, stepping round.
     t: 3.8,
     pelvis: [0.36, F + BODY.STAND - 0.1, 0.1], yaw: OUT, hipPitch: 0.05, lean: 0.08, look: 0.1,
-    feet: [{ p: [0.68, F, 0.1], yaw: OUT, arc: 0.2 }, { p: [-0.06, F, 0.1], yaw: OUT, arc: 1.0, pole: [-0.2, 1, 0.6] }],
+    feet: [{ p: [0.68, F, 0.1], yaw: OUT, arc: 0.2 }, { p: [-0.06, F, 0.1], yaw: OUT, arc: 1.15, pole: [-0.2, 1, 0.6] }],
     hands: [{ fk: [0.3, 0.3, 0.6] }, { fk: [0.3, 0.3, 0.6] }],
   },
   {
@@ -250,7 +250,7 @@ export class Choreo {
       // From a hold to a free arm, or back: let go (or take hold) halfway.
       return (pa ? e < 0.5 : e >= 0.5) ? { wrist: pa || pb, pole: poleAt(pa ? a : b) } : { fk: (a.fk || b.fk) };
     });
-    if (opts.carry) arms[0] = { local: new T.Vector3(0.8, 0.75, -0.12) };
+    if (opts.carry) arms[0] = { local: new T.Vector3(0.56, 1.1, -0.18) };
     return { pelvis, orient, hipPitch: this.ang.hipPitch(t), lean: this.ang.lean(t), look: this.ang.look(t), feet, arms };
   }
 }

@@ -25,6 +25,8 @@ const TERRAIN_X0 = -22400; // feet at index 0
 const TERRAIN_DX = 32; // feet per index
 // The diner's lot: a slab, its extent about the DINER feature.
 const PAD = { x0: -55, x1: 55, z0: -37, z1: 33 };
+// The program's verdicts on a landing that leaves the ship standing.
+const LANDINGS = ['GREATM', 'GOODM', 'ROUGHM', 'CRIPM'];
 
 /** Burness's lander, from the DESIGN table: moves (M) and lines (L) in
  * raster units about the ship's centre, with the intensity level (I). */
@@ -671,26 +673,78 @@ float blastAt(vec2 p){
     }
   }
 
-  /** Whether the ship is standing on the ground: the radar reads zero or
-   * less (the program stops flying it there; when it lifts off again it
-   * puts it four feet up first). */
-  onGround(state) {
-    return this.closeUp(state) && state.radary <= 0;
+  /**
+   * Whether the ship is standing on the ground. Not from RADARY: the
+   * program works its radar out against the full-height terrain and then
+   * the close-up's quarter-height one, and a snapshot can catch either,
+   * so it reads zero or less tens of feet up. The verdict message is
+   * certain: from GREATM, GOODM, ROUGHM or CRIPM until the program lifts
+   * the ship off again (PALOFF puts it four feet up first).
+   */
+  groundState(state, close) {
+    const S = this.symbols;
+    if (close && !this.touch && !this.exploded && LANDINGS.some((m) => S[m] !== undefined && S[m] === state.sysmes)) {
+      this.touch = { verdis: state.verdis };
+      this.lifting = false;
+    }
+    if (this.touch && (!close || state.verdis >= this.touch.verdis + 3)) {
+      this.touch = null;
+      this.lifting = close;
+    }
+    if (!close) this.lifting = false;
+    return !!this.touch;
   }
 
-  /** Where the car's reference point is, from the state; in flight carried
-   * forward between the program's steps with its own velocities, on the
-   * ground exactly where the program has it. */
-  poseFrom(state, now, down) {
-    // On the ground it stands on the ground (the program's VERDIS is a
-    // little above it; the springs take the rest).
-    if (down) return { x: state.hordis, y: this.groundAt(state.hordis, 0) - 0.06, a: state.angle };
-    const dt = Math.min(0.25, ((now - this.lastStateWall) / 1000) * (this.rate ?? 1));
-    return {
-      x: state.hordis + (state.horvel / 10) * dt,
-      y: state.verdis + (state.vervel / 10) * dt,
-      a: state.angle,
+  /**
+   * Follow the program's position. The program moves the ship a few times
+   * a second, a foot or two at a time in the close-up (HORDIS and VERDIS
+   * are whole feet), and far more far out. So the car is carried on the
+   * program's own velocities every frame, and drawn slowly toward where
+   * the program says it is, read as the middle of the foot it reported,
+   * carried on from the moment it reported it. Its steps never show, and
+   * the car is never far from the program. A velocity the program has
+   * left set while it no longer moves the ship is not used. On the ground
+   * the car stands on the ground. A jump (a new game) is taken at once.
+   */
+  track(state, mt, mdt, down) {
+    const now = state.t / 1e6;
+    let tr = this.tracker;
+    if (!tr || this.first) {
+      tr = this.tracker = { x: state.hordis + 0.5, y: state.verdis + 0.5, ax: { v: state.hordis, at: now, gap: 0.17 }, ay: { v: state.verdis, at: now, gap: 0.17 } };
+    }
+    for (const [a, v] of [[tr.ax, state.hordis], [tr.ay, state.verdis]]) {
+      if (v !== a.v) {
+        a.gap = Math.min(0.5, Math.max(0.02, 0.7 * a.gap + 0.3 * (now - a.at)));
+        a.v = v;
+        a.at = now;
+      }
+    }
+    const axis = (a, vel) => {
+      let v = vel / 10;
+      const e = Math.max(0, mt - a.at);
+      // Moving, as far as the program is concerned, only if the value has
+      // changed about as recently as it should have.
+      if (e > Math.max(0.35, 3 * a.gap, 2.5 / Math.max(1e-3, Math.abs(v)))) v = 0;
+      // Where the program has it: in the middle of the foot it reported,
+      // carried on at its velocity, no further than its next step.
+      const at = a.v + 0.5 + v * Math.min(e, 1.5 * a.gap);
+      return { v, at };
     };
+    const X = axis(tr.ax, state.horvel), Yv = axis(tr.ay, state.vervel);
+    const ty = down ? this.groundAt(state.hordis, 0) - 0.06 : Yv.at;
+    const far = (v) => 12 + 0.35 * Math.abs(v);
+    if (Math.abs(X.at - tr.x) > far(X.v) || Math.abs(ty - tr.y) > far(Yv.v)) {
+      tr.x = X.at;
+      tr.y = ty;
+      return tr;
+    }
+    tr.x += X.v * mdt;
+    if (!down) tr.y += Yv.v * mdt;
+    const kx = 1 - Math.exp(-mdt / 0.6);
+    const ky = 1 - Math.exp(-mdt / (down ? 0.1 : 0.6));
+    tr.x += (X.at - tr.x) * kx;
+    tr.y += (ty - tr.y) * ky;
+    return tr;
   }
 
   /**
@@ -710,18 +764,25 @@ float blastAt(vec2 p){
     if (this.lastState && state.time < this.lastState.time) this.reset();
     this.setScale(this.closeUp(state) ? 0.25 : 1);
     if (state !== this.lastState || state.t !== this.lastT) {
-      if (!this.lastState || state.hordis !== this.lastState.hordis || state.verdis !== this.lastState.verdis) this.lastStateWall = now;
+      this.lastStateWall = now;
       this.lastState = { ...state };
       this.lastT = state.t;
     }
-    // Machine time, carried forward between the program's steps.
-    const mt = state.t / 1e6 + Math.min(0.25, ((now - this.lastStateWall) / 1000) * (this.rate ?? 1));
-    this.mtime = Math.max(this.mtime, mt);
-    const down = this.onGround(state);
-    if (down) this.wasDown = true;
-    if (!this.closeUp(state)) this.wasDown = false;
-    this.liftingOff = this.wasDown && !down && !this.exploded;
-    const target = this.poseFrom(this.lastState, now, down);
+    // A steady clock in machine time for everything that moves: the
+    // machine runs in uneven chunks against the display, so the clock
+    // advances by the frame and is drawn gently to the machine's.
+    const st = state.t / 1e6;
+    if (this.first || !(Math.abs(st - this.mtime) < 0.25)) this.mtime = st;
+    else {
+      const was = this.mtime;
+      this.mtime += mdt;
+      this.mtime += (st - this.mtime) * Math.min(1, dt * 3);
+      this.mtime = Math.max(was, this.mtime);
+    }
+    const down = this.groundState(state, this.closeUp(state));
+    this.liftingOff = this.lifting && !this.exploded;
+    const tracked = this.track(state, this.mtime, mdt, down);
+    const target = { x: tracked.x, y: tracked.y, a: state.angle };
 
     // Turning: the program clears TURN as soon as it has used it, so read
     // the turn off the angle itself; the attitude jets fire with it.
@@ -740,10 +801,9 @@ float blastAt(vec2 p){
       this.puffing = true;
     } else this.puffing = false;
     this.prevAngle = target.a;
-    const k = this.first ? 1 : 1 - Math.exp(-dt / 0.06);
     const prevX = this.pose.x;
-    this.pose.x += (target.x - this.pose.x) * k;
-    this.pose.y += (target.y - this.pose.y) * k;
+    this.pose.x = target.x;
+    this.pose.y = target.y;
     // Angles: the program's are degrees clockwise from up. On the ground a
     // big change is the ship falling over (TILT): let it fall, not snap.
     let da = target.a - this.pose.a;
@@ -765,7 +825,7 @@ float blastAt(vec2 p){
     const dist = this.first ? d : this.camPos.distanceTo(this.camTarget) || d;
     const scale = Math.max(1, dist / 500);
     this.car.group.visible = !this.exploded;
-    this.car.place(this.pose.x, this.pose.y, this.pose.a, (x) => this.groundAt(x, 0), mdt, scale);
+    this.car.place(this.pose.x, this.pose.y, this.pose.a, (x) => this.groundAt(x, 0), mdt, scale, down ? 0 : state.vervel / 10);
     if (this.car.wheels.some((w) => w.contact)) this.car.roll(this.pose.x - prevX);
 
     // The driver.
@@ -819,7 +879,9 @@ float blastAt(vec2 p){
     // Exhaust. THRUST stays where it was when the program stops flying,
     // so on the ground there is none, whatever it says.
     const maxThrust = this.maxThrust || 1;
-    const power = this.exploded || down ? 0 : Math.max(0, Math.min(1, state.thrust / maxThrust)) * (state.fuel > 0 ? 1 : 0);
+    // Gas only while the program draws the flame (FSUBC); THRUST keeps its
+    // last value when the program stops flying the ship.
+    const power = this.exploded || down || state.flame === 0 ? 0 : Math.max(0, Math.min(1, state.thrust / maxThrust)) * (state.fuel > 0 ? 1 : 0);
     this.thrustNow = power;
     const jet = this.exploded ? { hit: null } : this.exhaust.update(this.mtime, mdt, power, this.camera, (x, z) => this.groundAt(x, z), scale);
     if (this.exploded) this.exhaust.hide();
@@ -920,7 +982,9 @@ float blastAt(vec2 p){
     this.exploded = false;
     this.shipSeen = false;
     this.walking = false;
-    this.wasDown = false;
+    this.touch = null;
+    this.lifting = false;
+    this.tracker = null;
     this.driver.reset();
     this.car.setCanopy(0);
     if (this.debris) {

@@ -147,7 +147,7 @@ export class Exhaust {
     this.sunDir = sunDir;
     this.mains = car.mains.map((port) => ({ port, jet: new Jet(16, 0.4, 0.2) }));
     this.rcs = [];
-    for (const [name, ports] of Object.entries(car.rcs)) for (const port of ports) this.rcs.push({ name, port, jet: new Jet(9, 0.5, 0.09) });
+    for (const [name, ports] of Object.entries(car.rcs)) for (const port of ports) this.rcs.push({ name, port, jet: new Jet(3.5, 0.45, 0.07) });
     for (const j of [...this.mains, ...this.rcs]) scene.add(j.jet.mesh);
     // Where the gas reaches the ground it runs out along it.
     this.splash = new T.Mesh(new T.CircleGeometry(1, 48), new T.ShaderMaterial({
@@ -176,7 +176,7 @@ export class Exhaust {
   }
 
   /** A short burst from one pair of attitude jets. */
-  puff(name, dur = 0.18) {
+  puff(name, dur = 0.12) {
     this.puffs[name] = Math.max(this.puffs[name] || 0, dur);
   }
 
@@ -194,7 +194,7 @@ export class Exhaust {
     for (const r of this.rcs) {
       const left = this.puffs[r.name] || 0;
       // A puff comes on hard and goes off at once.
-      all.push([r, left > 0 ? 0.9 : 0]);
+      all.push([r, left > 0 ? 0.55 * Math.min(1, left / 0.05) : 0]);
     }
     for (const name of Object.keys(this.puffs)) this.puffs[name] = Math.max(0, this.puffs[name] - dt);
     for (const [j, p] of all) {
