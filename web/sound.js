@@ -23,8 +23,21 @@ export class Sound {
   pause(on) {
     this.paused = on;
     if (!this.ac) return;
-    if (on && this.ac.state === 'running') this.ac.suspend();
-    if (!on && this.ac.state === 'suspended') this.ac.resume();
+    // Faded rather than cut: down over a few tenths, then stopped; back up
+    // the same way.
+    clearTimeout(this.pauseTimer);
+    const g = this.master.gain, t = this.ac.currentTime;
+    g.cancelScheduledValues(t);
+    g.setValueAtTime(g.value, t);
+    if (on) {
+      g.setTargetAtTime(0, t, 0.07);
+      this.pauseTimer = setTimeout(() => {
+        if (this.paused && this.ac.state === 'running') this.ac.suspend();
+      }, 450);
+    } else {
+      if (this.ac.state === 'suspended') this.ac.resume();
+      g.setTargetAtTime(this.muted ? 0 : 0.8, t, 0.07);
+    }
   }
 
   /** Start the audio context. Browsers allow this only from a gesture. */

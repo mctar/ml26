@@ -400,7 +400,8 @@ class Page {
       this.lastTilt = tilt;
       $('message').textContent = [m && MESSAGES_2026[m], tilt && MESSAGES_2026[tilt]].filter(Boolean).join(' ');
       if (!this.arrival) {
-        if (m && fresh) this.radio.say(m, { urgent: Object.keys(WRECKS).includes(m) });
+        // How it ended cuts short whatever warning was still being read.
+        if (m && fresh) this.radio.say(m, { urgent: Object.keys(WRECKS).includes(m) || LANDINGS.includes(m) });
         if (tilt) this.radio.say(tilt);
       }
     }
@@ -444,7 +445,12 @@ class Page {
     if (s.fuel <= 0 && f.airOutAt === undefined) f.airOutAt = Math.max(0, this.alt ?? s.radary);
     if (!f.td && LANDINGS.includes(m) && s.verdis < 450) f.td = { ...now(), msg: m };
     if (f.kind) {
-      if (!f.shown && s.t >= f.at.t + ENDINGS[f.kind].after * 1e6) this.ending(f);
+      // The card waits for the controller to finish talking, and a breath
+      // after; not for ever, should the sound be stuck.
+      if (!f.shown && s.t >= f.at.t + ENDINGS[f.kind].after * 1e6) {
+        f.due ??= performance.now();
+        if (this.radio.idle(600) || performance.now() - f.due > 8000) this.ending(f);
+      }
       return;
     }
     const end = (kind, extra = {}) => {
@@ -638,11 +644,14 @@ class Page {
   }
 
   /** How fast a demo runs: briskly down from the heights, near real time
-   * for the landing, a little quicker for what follows. */
+   * for the landing, a little quicker for the walk and the lunch, and real
+   * time once it has gone wrong, so the crash or the tip and what the
+   * controller says about it play out as they would. */
   demoPace() {
     const s = this.state;
     if (!s || s.verdis > 450) return 16;
     const f = this.flight;
+    if (f && f.kind && f.kind !== 'diner' && f.kind !== 'flag') return 1;
     return f && (f.td || f.kind) ? 3 : 2;
   }
 

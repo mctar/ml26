@@ -12,6 +12,12 @@ export class Radio {
     this.playing = null;
     this.queue = [];
     this.enabled = true;
+    this.endedAt = 0; // performance.now() when the last line finished
+  }
+
+  /** Nothing said, nothing waiting, and quiet for at least `ms`. */
+  idle(ms = 0) {
+    return !this.playing && !this.queue.length && performance.now() - this.endedAt >= ms;
   }
 
   get ac() {
@@ -44,11 +50,12 @@ export class Radio {
     for (const id of ids) this.load(id);
   }
 
-  /** Say this line; a line already queued is replaced by the newer one. */
+  /** Say this line; a line already queued is replaced by the newer one.
+   * The brief is background: anything the program says cuts it short. */
   say(id, { urgent = false } = {}) {
     if (!this.ac || !this.enabled) return;
     if (this.playing) {
-      if (urgent) this.stop();
+      if (urgent || this.playing.id === 'BRIEF') this.stop();
       else {
         this.queue = [id];
         return;
@@ -59,12 +66,25 @@ export class Radio {
 
   stop() {
     if (this.playing) {
+      // Cut off as a radio is, with a click, not mid-syllable.
+      const p = this.playing;
       try {
-        this.playing.src.stop();
+        if (p.gain) {
+          const t = this.ac.currentTime;
+          p.gain.gain.cancelScheduledValues(t);
+          p.gain.gain.setValueAtTime(p.gain.gain.value, t);
+          p.gain.gain.linearRampToValueAtTime(0, t + 0.06);
+          p.src.onended = null;
+          p.src.stop(t + 0.07);
+          for (const n of p.after || []) n.stop(t + 0.07);
+          this.squelch(t + 0.06, 0.7);
+          this.sound.duck(false);
+        } else if (p.src) p.src.stop();
       } catch (e) {
         /* already done */
       }
       this.playing = null;
+      this.endedAt = performance.now();
     }
     this.queue = [];
   }
@@ -87,14 +107,17 @@ export class Radio {
     g.gain.value = 0.9;
     src.connect(g).connect(this.sound.master);
     // The static under it, and the squelch at both ends.
-    this.static(t0 - 0.05, dur + 0.25);
+    const hiss = this.static(t0 - 0.05, dur + 0.25);
     this.squelch(t0 - 0.06);
-    this.squelch(t0 + dur + 0.08, 0.7);
+    const close = this.squelch(t0 + dur + 0.08, 0.7);
     this.sound.duck(true);
     src.start(t0);
     this.playing.src = src;
+    this.playing.gain = g;
+    this.playing.after = [hiss, close]; // what is booked for its end
     src.onended = () => {
       if (this.playing && this.playing.src === src) this.playing = null;
+      this.endedAt = performance.now();
       this.sound.duck(false);
       this.next();
     };
@@ -119,6 +142,7 @@ export class Radio {
     src.connect(f).connect(g).connect(this.sound.master);
     src.start(at);
     src.stop(at + 0.08);
+    return src;
   }
 
   static(at, dur) {
@@ -138,5 +162,6 @@ export class Radio {
     src.connect(f).connect(g).connect(this.sound.master);
     src.start(at);
     src.stop(at + dur + 0.02);
+    return src;
   }
 }
