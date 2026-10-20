@@ -24,7 +24,12 @@ Live at [moonlander.btrbot.com](https://moonlander.btrbot.com).
   pieces from `world/`); `sound.js` is what the driver hears; `main.js` paces the
   machine against the clock, keeps the two views, turns the controls into
   the pen, and holds the machine still while the guide, About or an end
-  card is open. Every way a flight can end (lunch at the diner, a flag, a
+  card is open. The page opens on the tube, with the program's own
+  greeting drawn in real time; a key switches the tube off and the title
+  comes up in the GT40's own letters (`title.js`, from the VT11 character
+  generator) over the car against the Earth, before the camera draws back
+  into the flight. The Earth is NASA's Blue Marble with its clouds
+  (`world/earth.jpg`). Every way a flight can end (lunch at the diner, a flag, a
   tip-over, a crater, a boulder, someone else's car, the diner itself) gets
   its own card; Play again runs through the program's own wait at speed
   and keeps the Moon, with everything earlier flights left on it. `vendor/three.js` is a bundled subset of three.js, built

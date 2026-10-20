@@ -163,6 +163,58 @@ export class Sound {
     }
   }
 
+  /** The tube switched off: the thump of the high voltage going, a tick,
+   * and a whine falling away as the picture collapses. */
+  powerOff() {
+    if (!this.ac) return;
+    const ac = this.ac, t = ac.currentTime;
+    const o = ac.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(95, t);
+    o.frequency.exponentialRampToValueAtTime(30, t + 0.35);
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.4, t + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0005, t + 0.42);
+    o.connect(g).connect(this.master);
+    o.start(t);
+    o.stop(t + 0.45);
+    this.burst(0.05, 0.22, 3200, 0.9);
+    const w = ac.createOscillator();
+    w.type = 'sine';
+    w.frequency.setValueAtTime(5800, t);
+    w.frequency.exponentialRampToValueAtTime(700, t + 0.38);
+    const gw = ac.createGain();
+    gw.gain.setValueAtTime(0.014, t);
+    gw.gain.exponentialRampToValueAtTime(0.0002, t + 0.4);
+    w.connect(gw).connect(this.master);
+    w.start(t);
+    w.stop(t + 0.42);
+  }
+
+  /** Under the opening shot: a low, slow swell, gone by the flight. */
+  swell(seconds = 6) {
+    if (!this.ac) return;
+    const ac = this.ac, t = ac.currentTime;
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.07, t + seconds * 0.35);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + seconds);
+    const lp = ac.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 420;
+    g.connect(lp).connect(this.master);
+    for (const [f, d] of [[55, 0], [82.4, 0.4], [110.6, -0.3]]) {
+      const o = ac.createOscillator();
+      o.type = 'triangle';
+      o.frequency.value = f;
+      o.detune.value = d * 10;
+      o.connect(g);
+      o.start(t);
+      o.stop(t + seconds + 0.1);
+    }
+  }
+
   /** The GT40's bell, kept: the LK40's beeper. */
   bell() {
     if (!this.ac) return;

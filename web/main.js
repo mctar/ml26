@@ -6,6 +6,7 @@ import { Phosphor } from './phosphor.js';
 import { Roadster } from './roadster.js';
 import { Sound } from './sound.js';
 import { Radio } from './radio.js';
+import { Title } from './title.js';
 
 const $ = (id) => document.getElementById(id);
 const tube = $('tube');
@@ -18,6 +19,18 @@ const LEAD = 8_000;
 const MAX_STEP = 250_000;
 /** Machine time at which the greeting ends and the game begins. */
 const GAME_START = 30.6e6;
+/** Machine time at which the opening holds the greeting on the tube, if no
+ * key has come by then: all of it drawn, a few seconds before its end. */
+const GREET_HOLD = 26e6;
+/** The opening shot: how long it dwells, how long it takes to draw back
+ * into the flight's own view (seconds). */
+const DWELL = 3.4;
+const PULL = 2.9;
+const calm = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const smooth = (x) => {
+  const k = Math.min(1, Math.max(0, x));
+  return k * k * (3 - 2 * k);
+};
 /** The program's verdicts on a landing. */
 const LANDINGS = ['GREATM', 'GOODM', 'ROUGHM', 'CRIPM'];
 /** The layers that can sit over the flight, topmost first. */
@@ -161,7 +174,9 @@ class Page {
     this.tMachine = 0;
     this.tRender = 0;
     this.lastFrame = 0;
-    this.arrival = true;
+    // The opening: { phase: 'tube' } the 1973 greeting until a key, then
+    // { phase: 'show' } the switch to 2026 and into the flight; null after.
+    this.intro = null;
     this.holds = new Set(); // what is holding the flight: an open sheet, the end card
     this.flight = null; // this descent: when it began, how it came down, how it ended
     this.tally = { lunch: 0, flag: 0, tipped: 0, crash: 0, diner: false }; // this Moon's flights
@@ -224,9 +239,9 @@ class Page {
     // While something is over the flight (a sheet, the end card) the
     // machine is given no time at all, and the scene stands still; on
     // release it carries on from the same instant.
-    if (this.holds.size) {
+    if (this.holds.size || this.introHolds()) {
       this.rate = 0;
-      while (this.holds.size) {
+      while (this.holds.size || this.introHolds()) {
         this.draw(t1);
         await new Promise((r) => requestAnimationFrame(r));
         t1 = performance.now();
@@ -234,9 +249,11 @@ class Page {
       this.originT = this.takenAt;
       this.originWall = t1;
     }
-    // The greeting runs fast behind the arrival card; then the machine
-    // holds until the card is dismissed; then the game at its pace.
-    const wanted = this.greeting() || this.skipping ? this.fastRate : this.arrival ? 0 : this.demo ? this.demoPace() : this.userRate;
+    // The greeting in real time on the tube until a key, then fast to the
+    // start, where the opening holds the machine until it is over; then
+    // the game at its pace.
+    const i = this.intro;
+    const wanted = i && i.phase === 'tube' ? 1 : (i && this.state && this.state.t < GAME_START) || this.greeting() || this.skipping ? this.fastRate : this.demo ? this.demoPace() : this.userRate;
     if (wanted !== this.rate) {
       this.originT = this.wallMachine();
       this.originWall = t1;
@@ -249,6 +266,12 @@ class Page {
       wm = this.originT;
     }
     this.target = wm + LEAD;
+    // The opening stops the machine exactly where it holds it.
+    const i2 = this.intro;
+    if (i2 && this.state) {
+      const cap = i2.phase === 'tube' ? GREET_HOLD : GAME_START;
+      if (this.state.t < cap) this.target = Math.min(this.target, cap);
+    }
     this.draw(t1);
     this.tRender += performance.now() - t1;
     this.tResume = performance.now();
@@ -262,8 +285,8 @@ class Page {
     const dt = Math.min(0.1, (now - (this.lastFrame || now)) / 1000);
     this.lastFrame = now;
     this.frames++;
-    if (this.arrival) this.orbit(now);
-    if (this.arrival && this.state && this.state.t >= GAME_START && now - this.arrivalSince > 3600 && this.sound.ac) this.landed();
+    if (this.holds.has('about')) this.orbit(now);
+    if (this.intro) this.introStep(now);
     if (!this.roadster.terrain && this.engine.game) {
       this.roadster.load(this.engine.symbols, (a) => this.engine.peek(a));
       this.roadster.maxThrust = this.engine.symbols.MAXTRS;
@@ -273,19 +296,26 @@ class Page {
     this.sounds();
     this.hud();
     if (this.norender && !force) return;
-    // The tube is drawn in both views: on the page, or on the diner's screens.
-    this.fitTube();
-    this.phosphor.frame(this.takenAt, this.taken, this.takenAt);
-    if (this.view !== 'tube') this.roadster.render();
+    // The tube is drawn in both views: on the page, or on the diner's
+    // screens. Held at the end of the greeting, it keeps the last picture.
+    const resized = this.fitTube();
+    const i = this.intro;
+    if (!(i && i.phase === 'tube' && this.introHolds()) || resized) this.phosphor.frame(this.takenAt, this.taken, this.takenAt);
+    if (this.view === 'tube') return;
+    if (!i) this.roadster.render();
+    else if (i.phase === 'show' && i.shown) this.roadster.render();
+    else if (this.roadster.landShown !== undefined && !this.warm && this.state && this.state.t > 2e6) {
+      // Once, behind the tube, so the scene's shaders are ready for it.
+      this.warm = true;
+      this.roadster.render();
+    }
   }
 
-  /** The car goes round its orbit on the arrival card, and leaves. */
+  /** The real one going round its orbit, in About. */
   orbit(now) {
     const car = $('car'), earth = $('earth'), mars = $('mars');
     if (!car) return;
-    const s = (now - this.arrivalSince) / 1000;
-    // Sound needs a gesture; after the orbit has played, ask for one.
-    if (s > 3 && !this.sound.ac && !this.replay) $('arrival-note').textContent = 'Tap or press a key to begin';
+    const s = now / 1000 - 2;
     // Years pass quickly: the Roadster's 1.525-year period, Earth's one,
     // Mars's 1.88, from the launch geometry (roughly: Earth at the car).
     const yrs = s * 1.6;
@@ -301,13 +331,131 @@ class Page {
     mars.setAttribute('cy', (-106.7 * Math.sin(tm)).toFixed(2));
   }
 
-  /** The arrival card comes down and the game is on; the first time, the
+  /** The opening's state: what has to be ready, and when. */
+  introBegin(phase, full) {
+    this.intro = { phase, full, at: performance.now(), shown: false };
+    const el = $('intro');
+    el.classList.remove('hidden');
+    el.classList.toggle('tube', phase === 'tube');
+    $('intro-go').classList.remove('on');
+    $('intro-sub').style.opacity = '0';
+    if (!this.title) this.title = new Title($('title'));
+    this.title.clear();
+    $('hud').classList.add('away');
+    sceneCanvas.style.opacity = '0';
+    if (phase === 'tube') {
+      tube.classList.remove('hidden', 'off');
+      $('hint').classList.add('hidden');
+      $('intro-go').querySelector('.key').textContent = this.replay ? 'A replay. Press any key to watch it' : 'Press any key';
+      $('intro-go').querySelector('.touch').textContent = this.replay ? 'A replay. Tap to watch it' : 'Tap to begin';
+    }
+  }
+
+  /** A key or a tap on the opening: on from the tube, or skip the show. */
+  introKey() {
+    const i = this.intro;
+    if (!i) return false;
+    this.wake();
+    if (i.phase === 'tube') {
+      i.phase = 'show';
+      i.at = performance.now();
+      i.clock = 0;
+      $('intro').classList.remove('tube');
+      $('intro-go').classList.remove('on');
+      this.sound.powerOff();
+      if (calm() || this.view === 'tube') this.tubeAway();
+      else {
+        tube.classList.add('off');
+        setTimeout(() => this.tubeAway(), 430);
+      }
+    } else if (i.full) i.skip = true;
+    return true;
+  }
+
+  /** The tube goes, unless it is the view. */
+  tubeAway() {
+    tube.classList.remove('off');
+    if (this.view !== 'tube') tube.classList.add('hidden');
+    else $('hint').classList.remove('hidden');
+  }
+
+  /** Whether the opening is holding the machine where it is. */
+  introHolds() {
+    const i = this.intro, s = this.state;
+    if (!i || !s) return false;
+    return i.phase === 'tube' ? s.t >= GREET_HOLD : s.t >= GAME_START;
+  }
+
+  /**
+   * The opening, each frame. On the tube, the program's greeting and a
+   * prompt. Then, the first time: the title struck in green dots on the
+   * dark, the scene coming up behind it as the dots turn white, the car
+   * against the Earth, and the long draw back into the flight's own view.
+   * Later games: the title briefly, and the flight.
+   */
+  introStep(now) {
+    const i = this.intro, s = this.state;
+    // Its own clock, by the frame, so a slow frame slows it down rather
+    // than jumping it on: a lost moment of it is a moment nobody saw.
+    const dt = Math.min(Math.max(0, (now - (i.last ?? now)) / 1000), this.introCap ?? 0.1);
+    i.last = now;
+    i.clock = (i.clock ?? 0) + dt;
+    const tau = i.clock;
+    if (i.phase === 'tube') {
+      if (tau > 1.4) $('intro-go').classList.add('on');
+      return;
+    }
+    const scene = this.view !== 'tube';
+    const rr = this.roadster;
+    const ready = s && s.t >= GAME_START && (!scene || (rr.landShown !== undefined && rr.earth && rr.earth.visible));
+    if (ready && i.readyAt === undefined) i.readyAt = tau;
+    if (!scene) {
+      if (ready) this.introEnd();
+      return;
+    }
+    const full = i.full && !i.skip;
+    const box = this.title.layout(window.innerHeight > window.innerWidth ? 0.74 : 0.76);
+    const sub = $('intro-sub');
+    sub.style.top = `${box.top + box.height + box.pitch * 2.2}px`;
+    sub.textContent = this.demo ? this.demo.name : 'Roadster edition';
+    const sweep = calm() ? 0 : full ? 1.25 : 0.45;
+    const t0 = full ? 0.45 : 0;
+    // The scene, once there is a scene to show, and not before the title.
+    if (i.readyAt !== undefined && i.sceneAt === undefined && tau >= (full ? 1.5 : 0.45)) {
+      i.sceneAt = tau;
+      if (full) this.sound.swell(DWELL + PULL);
+    }
+    let k = 0, fade = 0, hero = 0;
+    if (i.sceneAt !== undefined) {
+      hero = tau - i.sceneAt;
+      fade = smooth(hero / (full ? 1.2 : 0.45));
+      if (full) k = calm() ? (hero >= DWELL + 0.6 ? 1 : 0) : Math.min(1, Math.max(0, (hero - DWELL) / PULL));
+    }
+    i.shown = i.sceneAt !== undefined;
+    sceneCanvas.style.opacity = String(fade);
+    rr.opening = full && i.shown ? { t: hero, k } : null;
+    // The title: struck, whitening with the scene, gone before the draw back.
+    const out = full ? DWELL - 0.6 : 0.5;
+    const alpha = i.shown ? 1 - smooth((hero - out) / 0.8) : 1;
+    this.title.draw(tau - t0, { sweep, white: fade, alpha });
+    sub.style.opacity = String(Math.min(alpha, smooth((tau - t0 - sweep - 0.1) / 0.6)));
+    if (k > 0.7 || (!full && i.shown && hero > 0.5)) $('hud').classList.remove('away');
+    const done = full ? k >= 1 : i.shown && hero >= 1.0;
+    if (done || (i.skip && ready)) this.introEnd();
+  }
+
+  /** The opening is over and the game is on; the first time, the
    * controller reads the brief over the radio. */
-  landed() {
-    this.arrival = false;
-    const a = $('arrival');
-    a.style.opacity = '0';
-    setTimeout(() => a.classList.add('hidden'), 650);
+  introEnd() {
+    this.intro = null;
+    this.roadster.opening = null;
+    this.roadster.openingCentre = null;
+    this.roadster.first = true;
+    sceneCanvas.style.opacity = '1';
+    this.title.clear();
+    $('intro').classList.add('hidden');
+    $('intro-sub').style.opacity = '0';
+    $('hud').classList.remove('away');
     if (!this.briefed && !this.replay) {
       this.briefed = true;
       this.radio.say('BRIEF');
@@ -317,12 +465,14 @@ class Page {
 
   fitTube() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const onPage = this.view === 'tube';
+    const onPage = this.view === 'tube' || !tube.classList.contains('hidden');
     const w = onPage ? Math.round(tube.clientWidth * dpr) : 512, h = onPage ? Math.round(tube.clientHeight * dpr) : 384;
     if (tube.width !== w || tube.height !== h) {
       tube.width = w;
       tube.height = h;
+      return true;
     }
+    return false;
   }
 
   sounds() {
@@ -399,7 +549,7 @@ class Page {
       this.lastMessage = m;
       this.lastTilt = tilt;
       $('message').textContent = [m && MESSAGES_2026[m], tilt && MESSAGES_2026[tilt]].filter(Boolean).join(' ');
-      if (!this.arrival) {
+      if (!this.intro) {
         // How it ended cuts short whatever warning was still being read.
         if (m && fresh) this.radio.say(m, { urgent: Object.keys(WRECKS).includes(m) || LANDINGS.includes(m) });
         if (tilt) this.radio.say(tilt);
@@ -407,7 +557,7 @@ class Page {
     }
     if (s.fuel_low && !this.airLowSaid) {
       this.airLowSaid = true;
-      if (!this.arrival) this.radio.say('AIRLOW');
+      if (!this.intro) this.radio.say('AIRLOW');
     }
     if (!s.fuel_low) this.airLowSaid = false;
     if (this.frames % 15 === 0) {
@@ -740,7 +890,6 @@ class Page {
     if (h.get('r')) {
       try {
         this.replay = await Page.decode(h.get('r'));
-        $('arrival-note').textContent = 'A replay. Press R for a flight of your own.';
       } catch (e) {
         console.warn('bad replay', e);
       }
@@ -768,17 +917,15 @@ class Page {
       this.phosphor.now = 0;
       this.roadster.forgetWrecks();
       this.roadster.reset();
-      if (!this.arrival) {
-        this.arrival = true;
-        $('arrival').classList.remove('hidden');
-        $('arrival').style.opacity = '1';
-      }
-      this.arrivalSince = performance.now();
+      // The first time, the tube and its greeting; after that, the title.
+      const first = !this.opened;
+      this.opened = true;
+      this.warm = false;
+      this.introBegin(first ? 'tube' : 'show', first && this.view !== 'tube');
       if (this.demo) {
         this.demo.step = 0;
         const plan = this.demoPlan(this.demo);
         this.pending.push(['pilot', plan]);
-        $('arrival-note').textContent = `Demo: ${this.demo.name.toLowerCase()}`;
         const c = $('coach');
         c.textContent = `Demo: ${this.demo.name.toLowerCase()}. Esc to take over.`;
         c.classList.add('demo');
@@ -917,8 +1064,7 @@ class Page {
     for (const id of ['guide', 'about', 'demo']) $(id).addEventListener('click', (ev) => {
       if (ev.target === ev.currentTarget) this.hide(id);
     });
-    $('arrival').addEventListener('click', () => this.wake());
-    $('arrival').addEventListener('touchend', () => this.wake(), { passive: true });
+    $('intro').addEventListener('click', () => this.introKey());
 
     this.held = new Set();
     window.addEventListener('keydown', (ev) => {
@@ -929,6 +1075,14 @@ class Page {
       }
       if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
       if (ev.repeat && !['ArrowUp', 'ArrowDown'].includes(ev.code)) return;
+      // In the opening a key moves it on, and does nothing else; the sound
+      // switch and the guide work as ever.
+      const i = this.intro;
+      if (i && (i.phase === 'tube' || i.full) && !['KeyM', 'KeyH'].includes(ev.code) && ev.key !== '?' && !/^(Shift|Control|Alt|Meta)$/.test(ev.key)) {
+        this.introKey();
+        ev.preventDefault();
+        return;
+      }
       this.wake();
       if (ev.key === '?') {
         this.show('guide');

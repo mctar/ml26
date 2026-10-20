@@ -16,12 +16,26 @@ import { Props, Flag } from './world/props.js';
 import { Exhaust } from './world/plume.js';
 import { DustSheet, rng } from './world/ballistic.js';
 import { Crash, CrashKit } from './world/debris.js';
-import { Topple, carBody, poseCar } from './world/topple.js';
+import { Topple, carBody, poseCar, COM } from './world/topple.js';
 import { STEP } from './world/rigid.js';
 import { Land, landRings, ringIndex, ringChunks, landSurfaces } from './world/land.js';
 import { Prints } from './world/prints.js';
 import { makeEnvironment } from './world/env.js';
-import { hash, noise2 as noise, fbm2 as fbm } from './world/shape.js';
+import { hash } from './world/shape.js';
+
+const ease = (x) => {
+  const k = Math.min(1, Math.max(0, x));
+  return k * k * (3 - 2 * k);
+};
+
+/** Unit vector a turned toward unit vector b by fraction k. */
+function slerpDir(a, b, k) {
+  const cos = Math.min(1, Math.max(-1, a.dot(b)));
+  const ang = Math.acos(cos);
+  if (ang < 1e-5) return a.clone();
+  const s = Math.sin(ang);
+  return a.clone().multiplyScalar(Math.sin((1 - k) * ang) / s).addScaledVector(b, Math.sin(k * ang) / s);
+}
 
 const TERRAIN_N = 911; // words in TERAIN
 const TERRAIN_X0 = -22400; // feet at index 0
@@ -95,6 +109,9 @@ export class Roadster {
     this.camTarget = new T.Vector3();
     this.camPos = new T.Vector3();
     this.first = true;
+    // The opening, set by the page each frame: null, or { t, k }: seconds
+    // into the shot, and how far it has drawn back into the flight's own.
+    this.opening = null;
     this.pose = { x: 0, y: 0, a: 0 };
     this.lastState = null;
     this.lastStateWall = 0;
@@ -191,32 +208,62 @@ export class Roadster {
     const m = new T.PointsMaterial({ size: 2.2, sizeAttenuation: false, vertexColors: true, transparent: true, opacity: 0.9, depthWrite: false });
     this.stars = new T.Points(g, m);
     this.scene.add(this.stars);
-    // The Earth, far and high to the left, with continents and cloud from
-    // noise; it is lit by the same sun as the ground.
-    const c = document.createElement('canvas');
-    c.width = 512;
-    c.height = 256;
-    const ctx = c.getContext('2d');
-    const img = ctx.createImageData(512, 256);
-    for (let y = 0; y < 256; y++) {
-      for (let x = 0; x < 512; x++) {
-        const u = x / 512, v = y / 256;
-        const land = fbm(u * 9 + 2.3, v * 5 + 1.1) + 0.35 * fbm(u * 27, v * 15) - 0.78 + 0.18 * Math.abs(v - 0.5);
-        const ice = Math.abs(v - 0.5) > 0.44;
-        let r, gg, b;
-        if (ice) { r = 235; gg = 240; b = 245; }
-        else if (land > 0) { const t = Math.min(1, land * 6); r = 110 + 40 * t; gg = 100 + 30 * t; b = 60 + 20 * t; }
-        else { r = 30; gg = 70; b = 150; }
-        const cloud = Math.max(0, fbm(u * 14 + 7.7, v * 8 + 3.3) - 0.55) * 2.6;
-        r = r + (245 - r) * cloud; gg = gg + (245 - gg) * cloud; b = b + (248 - b) * cloud;
-        const i = (y * 512 + x) * 4;
-        img.data[i] = r; img.data[i + 1] = gg; img.data[i + 2] = b; img.data[i + 3] = 255;
-      }
-    }
-    ctx.putImageData(img, 0, 0);
-    const tex = new T.CanvasTexture(c);
-    tex.colorSpace = T.SRGBColorSpace;
-    const earth = new T.Mesh(new T.SphereGeometry(2600, 64, 48), new T.MeshStandardMaterial({ map: tex, roughness: 0.9, metalness: 0.0, emissive: 0x060a14, emissiveIntensity: 1 }));
+    // The Earth, far and high to the left: NASA's Blue Marble with its
+    // clouds, glossy where there is open sea, in a thin shell of air lit
+    // on the side the sun is on. It is lit by the same sun as the ground.
+    const load = (f, srgb) => {
+      const t = new T.TextureLoader().load(new URL(`./world/${f}`, import.meta.url).href, () => (earth.visible = true));
+      if (srgb) t.colorSpace = T.SRGBColorSpace;
+      t.anisotropy = 4;
+      return t;
+    };
+    const ER = 2600;
+    const earth = new T.Mesh(
+      new T.SphereGeometry(ER, 96, 64),
+      new T.MeshStandardMaterial({ map: load('earth.jpg', true), roughnessMap: load('earth_rough.jpg', false), roughness: 1, metalness: 0.0, emissive: 0x03050a, emissiveIntensity: 1 }),
+    );
+    earth.visible = false; // until its picture comes
+    // The air: a halo just outside the disc, from how close each line of
+    // sight passes to the planet (drawn behind it, so inside the disc the
+    // planet hides it whatever the depth buffer's precision), and a haze
+    // over the disc's edge in the planet's own shader.
+    const air = new T.Mesh(
+      new T.SphereGeometry(ER * 1.04, 96, 64),
+      new T.ShaderMaterial({
+        uniforms: { uSun: { value: this.sunDir }, uR: { value: ER }, uR2: { value: ER * 1.04 } },
+        vertexShader: `varying vec3 vW; varying vec3 vC;
+void main() { vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; vC = (modelMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
+        fragmentShader: `uniform vec3 uSun; uniform float uR; uniform float uR2; varying vec3 vW; varying vec3 vC;
+void main() {
+  vec3 d = normalize(vW - cameraPosition);
+  vec3 oc = vC - cameraPosition;
+  vec3 near = cameraPosition + d * dot(oc, d);
+  float b = length(near - vC);
+  float a = clamp((uR2 - b) / (uR2 - uR), 0.0, 1.0);
+  a = a * a * a;
+  float lit = smoothstep(-0.2, 0.5, dot(normalize(near - vC), normalize(uSun)));
+  gl_FragColor = vec4(vec3(0.3, 0.55, 1.0) * a * lit * 0.8, 1.0);
+}`,
+        side: T.BackSide,
+        blending: T.AdditiveBlending,
+        transparent: true,
+        depthWrite: false,
+      }),
+    );
+    earth.material.onBeforeCompile = (sh) => {
+      sh.uniforms.uSunE = { value: this.sunDir };
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform vec3 uSunE;').replace(
+        '#include <dithering_fragment>',
+        `#include <dithering_fragment>
+{
+  vec3 nW = normalize(inverseTransformDirection(normal, viewMatrix));
+  float edge = 1.0 - saturate(dot(normal, normalize(vViewPosition)));
+  float lit = smoothstep(-0.2, 0.5, dot(nW, normalize(uSunE)));
+  gl_FragColor.rgb += vec3(0.25, 0.45, 0.9) * pow(edge, 3.0) * lit * 0.55;
+}`,
+      );
+    };
+    earth.add(air);
     earth.position.set(-42000, 52000, -118000);
     earth.rotation.y = 1.2;
     this.scene.add(earth);
@@ -893,7 +940,8 @@ float blastAt(vec2 p){
       this.composer.setSize(w * this.renderer.getPixelRatio(), h * this.renderer.getPixelRatio());
       this.camera.aspect = w / h;
       // A wider view on a tall screen, so the horizon stays in it.
-      this.camera.fov = w / h < 1 ? 62 : w / h < 1.4 ? 50 : 42;
+      this.baseFov = w / h < 1 ? 62 : w / h < 1.4 ? 50 : 42;
+      if (!this.opening) this.camera.fov = this.baseFov;
       this.camera.updateProjectionMatrix();
     }
   }
@@ -1084,6 +1132,7 @@ float blastAt(vec2 p){
       if (this.car.wheels.some((w) => w.contact)) this.car.roll(this.pose.x - prevX);
       // Touchdown: the tyres kick the dust up where they meet it.
       if (wasAir && !this.car.airborne && close && this.car.vAir < -2) this.tyreDust(-this.car.vAir);
+      if (this.opening) this.openingPose(this.opening, dt);
     }
 
     // The driver.
@@ -1114,7 +1163,28 @@ float blastAt(vec2 p){
     const cam = new T.Vector3(look.x + d2 * 0.1, look.y + d2 * up, look.z + d2 * 0.95);
     // Keep the camera above the ground in front.
     cam.y = Math.max(cam.y, this.heightAt(cam.x, cam.z) + (close ? 6 : 25));
-    const kc = this.first ? 1 : 1 - Math.exp(-dt / 0.5);
+    let kc = this.first ? 1 : 1 - Math.exp(-dt / 0.5);
+    let fov = this.baseFov || this.camera.fov;
+    let near = Math.max(0.5, Math.min(d, d2) * 0.01);
+    if (this.opening && this.openingCentre) {
+      // The opening shot, turning and drawing back into the flight's own.
+      // Both cameras as where they stand from the car and which way they
+      // look, each turned and stretched from one to the other, so the car
+      // stays in the frame all the way.
+      const o = this.opening, c = this.openingCentre;
+      const hero = this.heroShot(o.t, c);
+      const e = ease(o.k);
+      const offH = hero.cam.clone().sub(c), offC = cam.clone().sub(c);
+      const lh = Math.log(offH.length()), lc = Math.log(offC.length());
+      const len = Math.exp(lh + (lc - lh) * e);
+      const vH = hero.look.clone().sub(hero.cam).normalize(), vC = look.clone().sub(cam).normalize();
+      cam.copy(c).addScaledVector(slerpDir(offH.normalize(), offC.normalize(), e), len);
+      look.copy(cam).addScaledVector(slerpDir(vH, vC, e), len);
+      fov = Math.exp(Math.log(hero.fov) + (Math.log(fov) - Math.log(hero.fov)) * e);
+      near = Math.max(0.5, Math.min(0.3 * cam.distanceTo(c), near));
+      kc = 1;
+    }
+    if (this.camera.fov !== fov) this.camera.fov = fov;
     if (this.debugCam) {
       // For tests: a fixed camera.
       cam.set(...this.debugCam.pos);
@@ -1124,14 +1194,19 @@ float blastAt(vec2 p){
     this.camPos.lerp(cam, kc);
     this.camera.position.copy(this.camPos);
     this.camera.lookAt(this.camTarget);
-    this.camera.near = Math.max(0.5, Math.min(d, d2) * 0.01);
+    this.camera.near = near;
     this.camera.far = 1500000;
     this.camera.updateProjectionMatrix();
 
     // The sun's shadow camera follows what is being looked at.
     // Far out it takes in all the country in view, so the mountains throw
     // their shadows across it; close in, the car and the ground round it.
-    const sunR = close ? T.MathUtils.clamp(alt * 1.2 + 70, 70, 900) : T.MathUtils.clamp(dist * 1.3, 3000, 60000);
+    let sunR = close ? T.MathUtils.clamp(alt * 1.2 + 70, 70, 900) : T.MathUtils.clamp(dist * 1.3, 3000, 60000);
+    // In the opening, close on the car: its own shadows on itself.
+    if (this.opening && this.openingCentre) {
+      const e = ease(this.opening.k);
+      sunR = T.MathUtils.lerp(Math.max(30, this.camPos.distanceTo(this.openingCentre) * 0.4), sunR, e * e);
+    }
     const back = close ? sunR * 3 : Math.max(sunR * 3, 40000);
     this.sunTarget.position.copy(this.camTarget);
     this.sun.position.copy(this.sunTarget.position).addScaledVector(this.sunDir, back);
@@ -1155,9 +1230,11 @@ float blastAt(vec2 p){
     const maxThrust = this.maxThrust || 1;
     // Gas only while the program draws the flame (FSUBC); THRUST keeps its
     // last value when the program stops flying the ship.
-    const power = this.crash || this.topple || down || state.flame === 0 ? 0 : Math.max(0, Math.min(1, state.thrust / maxThrust)) * (state.fuel > 0 ? 1 : 0);
+    const power = this.opening || this.crash || this.topple || down || state.flame === 0 ? 0 : Math.max(0, Math.min(1, state.thrust / maxThrust)) * (state.fuel > 0 ? 1 : 0);
     this.thrustNow = power;
-    const jet = this.crash ? { hit: null } : this.exhaust.update(this.mtime, mdt, power, this.camera, (x, z) => this.groundAt(x, z), scale);
+    // (The program is held through the opening: its puffs go by the clock.)
+    const xdt = this.opening ? dt : mdt;
+    const jet = this.crash ? { hit: null } : this.exhaust.update(this.mtime + (this.openingClock || 0), xdt, power, this.camera, (x, z) => this.groundAt(x, z), scale);
     if (this.crash) this.exhaust.hide();
     if (jet.hit) {
       this.dust.emit(mdt, jet.hit, jet.strength, jet.alt, (x, z) => this.groundAt(x, z), scale);
@@ -1209,6 +1286,57 @@ float blastAt(vec2 p){
       if (z) v.set(z.x, z.z, z.r, z.s);
       else v.set(0, 0, 1, 0);
     });
+  }
+
+  /**
+   * The car in the opening: drifting end over end as it has since it left
+   * the Earth, then brought round on its corner jets to the attitude the
+   * program starts it at, turning about its middle.
+   */
+  openingPose(o, dt) {
+    const g = this.car.group;
+    const qFlight = g.quaternion.clone();
+    const com = COM.clone().multiplyScalar(g.scale.x);
+    const c = com.clone().applyQuaternion(qFlight).add(g.position);
+    const t = o.t;
+    const qHero = new T.Quaternion().setFromEuler(new T.Euler(0.8 + 0.04 * t, -0.5 + 0.05 * t, 0.15 + 0.02 * t, 'YXZ'));
+    const e = ease(T.MathUtils.clamp((o.k - 0.04) / 0.55, 0, 1));
+    const q = qHero.slerp(qFlight, e);
+    g.quaternion.copy(q);
+    g.position.copy(c).sub(com.applyQuaternion(q));
+    g.updateMatrixWorld(true);
+    this.openingCentre = c;
+    // The corner jets, in short bursts while it turns.
+    this.openingClock = (this.openingClock || 0) + dt;
+    const turning = e > 0.02 && e < 0.9;
+    const beat = Math.floor(this.openingClock / 0.32);
+    if (turning && beat !== this.openingBeat) {
+      this.openingBeat = beat;
+      const pair = beat % 2 ? ['noseDown', 'tailUp'] : ['noseUp', 'tailDown'];
+      for (const p of pair) this.exhaust.puff(p, 0.14);
+      this.puffing = true;
+    } else this.puffing = false;
+  }
+
+  /** The opening shot: the car, near, against the Earth, on a long lens. */
+  heroShot(t, c) {
+    const aspect = this.camera.aspect || 16 / 9;
+    // About fifteen degrees across, whatever the screen.
+    const hfov = 10.5;
+    const vfov = T.MathUtils.radToDeg(2 * Math.atan(Math.tan(T.MathUtils.degToRad(hfov / 2)) / aspect));
+    const e = this.earth.position.clone().sub(c).normalize();
+    const up = new T.Vector3(0, 1, 0).addScaledVector(e, -e.y).normalize();
+    const right = new T.Vector3().crossVectors(e, up).normalize();
+    // The car beside the Earth on a wide screen, under it on a tall one;
+    // drifting a little closer as the shot goes on.
+    const wide = aspect >= 1;
+    const sep = T.MathUtils.degToRad((wide ? hfov * 0.42 : vfov * 0.3) * (1 - 0.02 * t));
+    const toCar = e.clone().multiplyScalar(Math.cos(sep)).addScaledVector(wide ? right : up, -Math.sin(sep)).normalize();
+    const D = 185 * (1 - 0.025 * t);
+    const cam = c.clone().addScaledVector(toCar, -D);
+    // Both a little above the middle, to leave room for the title below.
+    const dir = toCar.clone().add(e).normalize().addScaledVector(up, -Math.tan(T.MathUtils.degToRad(vfov * 0.13))).normalize();
+    return { cam, look: cam.clone().addScaledVector(dir, D), fov: vfov };
   }
 
   render() {
