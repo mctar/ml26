@@ -12,6 +12,9 @@
 
 import * as T from '../vendor/three.js';
 
+/** How far down the gas still lifts dust, feet. */
+const REACH = 60;
+
 const vert = /* glsl */ `
 varying vec3 vLocal;
 varying vec3 vWorld;
@@ -216,7 +219,7 @@ export class Exhaust {
       if (this.mains.includes(j) && dir.y < -0.2) {
         // Down the axis to the ground.
         const t = (pos.y - u.uGround.value) / -dir.y;
-        if (t < 24 * scale) {
+        if (t < REACH * scale) {
           centre.add(pos.clone().addScaledVector(dir, t));
           n++;
           out.alt = Math.min(out.alt, pos.y - u.uGround.value);
@@ -227,7 +230,9 @@ export class Exhaust {
       centre.divideScalar(n);
       centre.y = groundAt(centre.x, centre.z) + 0.15;
       out.hit = centre;
-      out.strength = power * Math.max(0, 1 - out.alt / (24 * scale));
+      // Felt from sixty feet, and much more the lower.
+      const f = Math.max(0, 1 - out.alt / (REACH * scale));
+      out.strength = power * f * Math.sqrt(f);
       this.splash.visible = true;
       this.splash.position.copy(centre);
       const R = (4 + out.alt * 0.9) * scale;

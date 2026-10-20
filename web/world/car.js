@@ -641,7 +641,7 @@ export class Car {
       this.heave += this.heaveV * h;
     }
     this.group.position.set(x, by, 0);
-    this.group.rotation.set(0, 0, th);
+    this.group.quaternion.set(0, 0, Math.sin(th / 2), Math.cos(th / 2));
     this.group.scale.setScalar(scale);
     // Wheels: in contact, they sit on the ground; in the air, they hang.
     let maxT = -CAR.DROOP;
@@ -665,6 +665,43 @@ export class Car {
     // The body never sinks onto its tyres.
     this.heave = clamp(this.heave, maxT - 0.28, 0.12);
     this.body.position.y = this.heave;
+  }
+
+  /**
+   * The car as a free body has it (over on its side, on its roof): the
+   * group is posed already. Wheels on the ground sit at their ride height
+   * and turn with it; wheels off it hang on their springs and keep turning
+   * as they were, slowing a little.
+   * @param wheels the rigid body's wheels, each with `ref` (one of ours),
+   *               `contact` and `spin` (rad/s)
+   */
+  freeWheels(wheels, dt) {
+    const span = Math.min(Math.max(dt, 0), 0.25);
+    const n = Math.ceil(span / (1 / 240));
+    const h = n ? span / n : 0;
+    for (const bw of wheels) {
+      const w = bw.ref;
+      if (!w) continue;
+      if (bw.contact) {
+        w.t += (0 - w.t) * Math.min(1, dt * 20);
+        w.tv = 0;
+      } else {
+        for (let k = 0; k < n; k++) {
+          w.tv += (-(w.t + CAR.DROOP) * 90 - w.tv * 12) * h;
+          w.t = clamp(w.t + w.tv * h, -CAR.DROOP, CAR.BUMP);
+        }
+      }
+      w.contact = bw.contact;
+      w.group.position.y = w.r + w.t;
+      w.spin += bw.spin * dt;
+      w.spinner.rotation.z = w.spin;
+    }
+    for (let k = 0; k < n; k++) {
+      this.heaveV += (-120 * this.heave - 9 * this.heaveV) * h;
+      this.heave += this.heaveV * h;
+    }
+    this.body.position.y = this.heave;
+    this.airborne = !wheels.some((w) => w.contact);
   }
 
   /** Turn the wheels by distance travelled along the ground. */

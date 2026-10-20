@@ -9,13 +9,15 @@
 // table exactly, and falls away into invented hills behind and in front.
 
 import * as T from './vendor/three.js';
-import { Car } from './world/car.js';
+import { Car, CAR } from './world/car.js';
 import { Astronaut } from './world/astronaut.js';
 import { Driver, WINDOW } from './world/driver.js';
 import { Props, Flag } from './world/props.js';
 import { Exhaust } from './world/plume.js';
 import { DustSheet, rng } from './world/ballistic.js';
-import { Debris } from './world/debris.js';
+import { Crash, CrashKit } from './world/debris.js';
+import { Topple, carBody, poseCar } from './world/topple.js';
+import { STEP } from './world/rigid.js';
 import { Prints } from './world/prints.js';
 import { makeEnvironment } from './world/env.js';
 import { hash, noise2 as noise, fbm2 as fbm } from './world/shape.js';
@@ -58,6 +60,15 @@ const LANDINGS = ['GREATM', 'GOODM', 'ROUGHM', 'CRIPM'];
 const LANDER_1973 = [['I', 4], ['M', -6, 0], ['L', -14, 8], ['L', -14, 20], ['L', -6, 29], ['L', 6, 29], ['L', 14, 20], ['L', 14, 8], ['L', 6, 0], ['L', -6, 0], ['M', -17, 0], ['L', -17, -16], ['L', 17, -16], ['L', 17, 0], ['L', -17, 0], ['I', 3], ['L', -32, -24], ['M', 17, 0], ['L', 32, -24], ['I', 1], ['M', -17, -14], ['L', -28, -18], ['M', 17, -14], ['L', 28, -18], ['I', 4], ['M', 36, -24], ['L', 28, -24], ['M', -28, -24], ['L', -36, -24], ['M', -3, -16], ['L', -7, -21], ['L', 7, -21], ['L', 3, -16]];
 
 export const FEATURE = { NONE: 0, OLD_SHIP: 1, FLAG: 2, WRECK_LEFT: 3, WRECK_RIGHT: 4, ROCK: 5, DINER_SIDE: 6, DINER: 7 };
+
+/** A car left on the ground, as a solid: the ellipsoid of its hull. */
+function carSolid(car) {
+  car.group.updateMatrixWorld(true);
+  const box = new T.Box3();
+  for (const p of car.hull) box.expandByPoint(p.clone().applyMatrix4(car.body.matrixWorld));
+  const c = box.getCenter(new T.Vector3()), h = box.getSize(new T.Vector3()).multiplyScalar(0.5);
+  return { x: c.x, y: c.y, z: c.z, hx: h.x * 1.05, hy: h.y, hz: h.z * 1.05 };
+}
 
 export class Roadster {
   /**
@@ -107,9 +118,13 @@ export class Roadster {
     this.driver = new Driver(this);
     this.exhaust = new Exhaust(this.scene, this.car, this.sunDir);
     this.dust = new DustSheet(this.scene, this.random);
+    this.crashKit = new CrashKit(this.scene, this.car);
     this.blasts = [];
-    this.exploded = false;
-    this.debris = null;
+    this.exploded = false; // the car has come apart
+    this.crash = null; // from the program's crash until a new game
+    this.topple = null; // the car going over
+    this.events = []; // for the sound: blows, the burst
+    this.wreckPoses = new Map(); // terrain index: how a tipped car came to lie
     this.composer = null;
     this.thrustNow = 0;
     this.mtime = 0;
@@ -251,10 +266,14 @@ export class Roadster {
         this.leftovers.add(flag.group);
         this.leftoverAt.push({ kind: 'flag', o: flag.group, x: x + 6, z: 5.8 });
       } else {
-        const car = new Car({ kind: f === FEATURE.OLD_SHIP ? 'parked' : 'wreck', env: this.env });
+        // A tipped car lies as it came to rest; one from before this page
+        // (a replay's earlier games are all on this page) as a car lies
+        // on its roof.
+        const lay = f === FEATURE.OLD_SHIP ? null : this.wreckPoses.get(i) || this.wreckPoses.get(i - 1) || this.wreckPoses.get(i + 1);
+        const car = new Car({ kind: f === FEATURE.OLD_SHIP ? 'parked' : 'tipped', env: this.env });
         car.setCanopy(f === FEATURE.OLD_SHIP ? 1 : 0);
         this.leftovers.add(car.group);
-        this.leftoverAt.push({ kind: 'car', car, x, a: f === FEATURE.WRECK_LEFT ? -50 : f === FEATURE.WRECK_RIGHT ? 50 : 0 });
+        this.leftoverAt.push({ kind: 'car', car, x, a: 0, lay, wreck: f !== FEATURE.OLD_SHIP });
       }
     }
     this.scene.add(this.leftovers);
@@ -264,8 +283,71 @@ export class Roadster {
   placeLeftovers() {
     for (const l of this.leftoverAt || []) {
       if (l.kind === 'flag') l.o.position.set(l.x, this.groundAt(l.x, l.z) - 0.25, l.z);
+      else if (l.wreck) this.layWreck(l);
       else l.car.place(l.x, this.height(l.x), l.a, (x) => this.groundAt(x, 0), 0);
+      if (l.car) l.solid = carSolid(l.car);
     }
+  }
+
+  /** A tipped car where it came to rest; or, not having seen it go over,
+   * upside down where the program keeps it, let fall into place. */
+  layWreck(l) {
+    const car = l.car;
+    if (l.lay) {
+      car.group.position.copy(l.lay.p);
+      car.group.quaternion.copy(l.lay.q);
+      // The ground there may have changed height with the close-up.
+      if (l.lay.scaleY !== this.scaleY) car.group.position.y += this.height(l.lay.p.x) - l.lay.h;
+      for (const [i, w] of car.wheels.entries()) {
+        w.group.position.y = w.r + (l.lay.wheels ? l.lay.wheels[i] : -CAR.DROOP);
+        w.spinner.rotation.z = i * 1.7;
+      }
+      car.group.updateMatrixWorld(true);
+      return;
+    }
+    if (!l.settled || l.settled.scaleY !== this.scaleY) {
+      const solid = (x, z) => this.groundAt(x, z);
+      const body = carBody(car);
+      const q = new T.Quaternion().setFromAxisAngle(new T.Vector3(1, 0, 0), Math.PI * 0.97);
+      body.set(new T.Vector3(l.x, this.height(l.x) + 6, 0), q, new T.Vector3(), new T.Vector3());
+      for (let i = 0; i < 6 / STEP && !body.asleep; i++) body.step(solid);
+      l.settled = { scaleY: this.scaleY, x: body.x.clone(), q: body.q.clone() };
+    }
+    const b = { x: l.settled.x, q: l.settled.q };
+    poseCar(car, b);
+    for (const w of car.wheels) w.group.position.y = w.r - CAR.DROOP;
+    car.group.updateMatrixWorld(true);
+  }
+
+  /**
+   * The height of whatever is solid at (x, z): the ground, the boulders,
+   * the diner's roof, cars left from earlier games. For things that fall
+   * on them.
+   */
+  solidAt(x, z) {
+    let h = this.groundAt(x, z);
+    const near = this.rockCells && this.rockCells.get(Math.floor(x / 64));
+    for (const r of near || []) {
+      const dx = x - r.x, dz = z - r.z;
+      if (Math.abs(dx) > r.reach || Math.abs(dz) > r.reach) continue;
+      const lx = dx * r.c - dz * r.s, lz = dx * r.s + dz * r.c;
+      const u = 1 - (lx / r.sx) ** 2 - (lz / r.sz) ** 2;
+      if (u > 0) h = Math.max(h, r.y + r.sy * Math.sqrt(u));
+    }
+    if (this.diner && this.pad) {
+      // The roof, and the wing over the stalls in front of it.
+      const dx = Math.abs(x - this.diner.position.x), k = this.diner.scale.y;
+      if (dx < 42 && z > -45 && z < 1) h = Math.max(h, this.pad.y + 14.35 * k);
+      if (dx < 48 && z >= 1 && z < 27) h = Math.max(h, this.pad.y + 17.25 * k);
+    }
+    for (const l of this.leftoverAt || []) {
+      const c = l.solid;
+      if (!c) continue;
+      const dx = (x - c.x) / c.hx, dz = (z - c.z) / c.hz;
+      const u = 1 - dx * dx - dz * dz;
+      if (u > 0) h = Math.max(h, c.y + c.hy * Math.sqrt(u));
+    }
+    return h;
   }
 
   /** The 1973 lander, in light: Burness's DESIGN table as a hologram in
@@ -602,6 +684,18 @@ float blastAt(vec2 p){
         this.padSlab.geometry = padGeometry(this.pad.y - low + 1.5);
       } else o.position.set(x, this.height(x) + lift, z);
     }
+    // The boulders as solids: their ellipsoids, a little inside the
+    // facets.
+    this.rockCells = new Map();
+    for (const r of this.rocks ? this.rocks.children : []) {
+      const sx = r.scale.x * 0.95, sy = r.scale.y * 0.95, sz = r.scale.z * 0.95;
+      const solid = { x: r.position.x, y: r.position.y, z: r.position.z, sx, sy, sz, c: Math.cos(r.rotation.y), s: Math.sin(r.rotation.y), reach: Math.max(sx, sz) };
+      // Filed by 64-foot column, in every column it reaches into.
+      for (let c = Math.floor((solid.x - solid.reach) / 64); c <= Math.floor((solid.x + solid.reach) / 64); c++) {
+        if (!this.rockCells.has(c)) this.rockCells.set(c, []);
+        this.rockCells.get(c).push(solid);
+      }
+    }
   }
 
   /** A drive-in diner: a glass box under a wide flat roof, a lit interior,
@@ -712,7 +806,7 @@ float blastAt(vec2 p){
    */
   groundState(state, close) {
     const S = this.symbols;
-    if (close && !this.touch && !this.exploded && LANDINGS.some((m) => S[m] !== undefined && S[m] === state.sysmes)) {
+    if (close && !this.touch && !this.crash && LANDINGS.some((m) => S[m] !== undefined && S[m] === state.sysmes)) {
       this.touch = { verdis: state.verdis };
       this.lifting = false;
     }
@@ -767,12 +861,19 @@ float blastAt(vec2 p){
       tr.y = ty;
       return tr;
     }
-    tr.x += X.v * mdt;
+    // Carried on, but never into the ground: a ship coming down fast
+    // meets it before the program says so, and stops there.
+    if (!tr.struck) tr.x += X.v * mdt;
     if (!down) tr.y += Yv.v * mdt;
     const kx = 1 - Math.exp(-mdt / 0.6);
     const ky = 1 - Math.exp(-mdt / (down ? 0.1 : 0.6));
     tr.x += (X.at - tr.x) * kx;
     tr.y += (ty - tr.y) * ky;
+    const floor = this.groundAt(tr.x, 0) - 0.06;
+    if (!down && tr.y < floor) {
+      tr.y = floor;
+      if (Yv.v < -30) tr.struck = true;
+    } else if (tr.y > floor + 2) tr.struck = false;
     return tr;
   }
 
@@ -809,7 +910,7 @@ float blastAt(vec2 p){
       this.mtime = Math.max(was, this.mtime);
     }
     const down = this.groundState(state, this.closeUp(state));
-    this.liftingOff = this.lifting && !this.exploded;
+    this.liftingOff = this.lifting && !this.crash;
     const tracked = this.track(state, this.mtime, mdt, down);
     const target = { x: tracked.x, y: tracked.y, a: state.angle };
 
@@ -838,8 +939,29 @@ float blastAt(vec2 p){
     let da = target.a - this.pose.a;
     while (da > 180) da -= 360;
     while (da < -180) da += 360;
-    const tau = down && Math.abs(da) > 10 ? 0.45 : 0.12;
-    this.pose.a += da * (this.first ? 1 : 1 - Math.exp(-dt / tau));
+    this.pose.a += da * (this.first ? 1 : 1 - Math.exp(-dt / 0.12));
+
+    // Over: the program has the ship tipped (FSUBC holds the message).
+    if (!this.topple && !this.crash && this.scaleY < 1 && down && this.tipMessage(state)) this.startTopple(state);
+    // A crash: the program stops drawing the ship (SHIPDP cleared) once it
+    // has drawn it at least once this game.
+    if (state.shipdp !== 0) this.shipSeen = true;
+    const said = state.sysmes !== this.sysmesWas && this.crashMessage(state);
+    this.sysmesWas = state.sysmes;
+    if (this.shipSeen && (state.shipdp === 0 || said) && !this.crash && this.scaleY < 1) this.startCrash(state);
+    if (!this.crash) this.crashKit.idle();
+    if (this.crash) {
+      for (const e of this.crash.update(mdt)) this.happened(e);
+      if (!this.exploded) this.followCar();
+      else {
+        this.pose.x = this.crashAt.x;
+        this.pose.y = this.crashAt.y;
+      }
+    } else if (this.topple) {
+      for (const h of this.topple.update(mdt)) this.happened({ kind: 'blow', at: h.at, speed: h.speed });
+      this.followCar();
+      if (this.topple.resting && !this.toppleKept) this.keepWreck();
+    }
 
     const ground = this.height(this.pose.x);
     const alt = Math.max(0, this.pose.y - ground);
@@ -854,8 +976,13 @@ float blastAt(vec2 p){
     const dist = this.first ? d : this.camPos.distanceTo(this.camTarget) || d;
     const scale = Math.max(1, dist / 500);
     this.car.group.visible = !this.exploded;
-    this.car.place(this.pose.x, this.pose.y, this.pose.a, (x) => this.groundAt(x, 0), mdt, scale, down ? 0 : state.vervel / 10);
-    if (this.car.wheels.some((w) => w.contact)) this.car.roll(this.pose.x - prevX);
+    if (!this.topple && !this.crash) {
+      const wasAir = this.car.airborne;
+      this.car.place(this.pose.x, this.pose.y, this.pose.a, (x) => this.groundAt(x, 0), mdt, scale, down ? 0 : state.vervel / 10);
+      if (this.car.wheels.some((w) => w.contact)) this.car.roll(this.pose.x - prevX);
+      // Touchdown: the tyres kick the dust up where they meet it.
+      if (wasAir && !this.car.airborne && close && this.car.vAir < -2) this.tyreDust(-this.car.vAir);
+    }
 
     // The driver.
     this.man.root.visible = !this.exploded;
@@ -864,7 +991,10 @@ float blastAt(vec2 p){
     this.walking = this.driver.isOut && close;
     const driverX = this.driver.x;
 
-    const look = new T.Vector3(this.pose.x + (state.horvel / 10) * 0.6, ground + alt * (close ? 0.5 : 0.6) + 6, 0);
+    // Ahead of the car by its speed, while it flies; the program leaves its
+    // velocity set after a crash or a tip, and the camera should not go on.
+    const lead = this.crash || this.topple ? 0 : state.horvel / 10;
+    const look = new T.Vector3(this.pose.x + lead * 0.6, ground + alt * (close ? 0.5 : 0.6) + 6, 0);
     let d2 = d;
     if (this.walking && driverX !== undefined) {
       // Both the car and the driver in the frame while he walks; follow
@@ -910,33 +1040,35 @@ float blastAt(vec2 p){
     const maxThrust = this.maxThrust || 1;
     // Gas only while the program draws the flame (FSUBC); THRUST keeps its
     // last value when the program stops flying the ship.
-    const power = this.exploded || down || state.flame === 0 ? 0 : Math.max(0, Math.min(1, state.thrust / maxThrust)) * (state.fuel > 0 ? 1 : 0);
+    const power = this.crash || this.topple || down || state.flame === 0 ? 0 : Math.max(0, Math.min(1, state.thrust / maxThrust)) * (state.fuel > 0 ? 1 : 0);
     this.thrustNow = power;
-    const jet = this.exploded ? { hit: null } : this.exhaust.update(this.mtime, mdt, power, this.camera, (x, z) => this.groundAt(x, z), scale);
-    if (this.exploded) this.exhaust.hide();
+    const jet = this.crash ? { hit: null } : this.exhaust.update(this.mtime, mdt, power, this.camera, (x, z) => this.groundAt(x, z), scale);
+    if (this.crash) this.exhaust.hide();
     if (jet.hit) {
       this.dust.emit(mdt, jet.hit, jet.strength, jet.alt, (x, z) => this.groundAt(x, z), scale);
       this.scour(jet.hit, jet.strength, jet.alt, mdt);
     } else this.dust.stop();
     this.dust.update(this.mtime);
 
-    // A crash: the program stops drawing the ship (SHIPDP cleared) once it
-    // has drawn it at least once this game.
-    if (state.shipdp !== 0) this.shipSeen = true;
-    if (this.shipSeen && state.shipdp === 0 && !this.exploded && close) this.explode(state);
-    if (this.debris) this.debris.step(mdt);
     if (this.flashAt !== undefined) {
       const f = this.mtime - this.flashAt;
-      this.flash.position.copy(this.car.group.position).add(new T.Vector3(0, 6, 4));
-      this.flash.intensity = f < 0.5 ? 700 * Math.exp(-f * 12) : 0;
+      this.flash.position.copy(this.crashAt).add(new T.Vector3(0, 4, 3));
+      this.flash.intensity = f < 0.4 ? this.flashPower * Math.exp(-f * 16) : 0;
       if (f > 1) this.flashAt = undefined;
+    }
+    // The ground the ejecta come down on lightens as they land.
+    if (this.halo) {
+      const k = Math.min(1, (this.mtime - this.halo.at) / this.halo.over);
+      this.halo.b.s = this.halo.s * k * k * (3 - 2 * k);
+      this.pushBlasts();
+      if (k >= 1) this.halo = null;
     }
     if (this.rereadAt && this.rereadAt.length && this.mtime >= this.rereadAt[0]) {
       this.rereadAt.shift();
       this.rereadTerrain();
     }
     // The diner, if the program says it has been destroyed.
-    if (this.diner) this.dinerStands(!!(state.diner & 1));
+    if (this.diner) this.dinerStands(!!(state.diner & 1) || (this.crash && !this.exploded), mdt);
     this.first = false;
   }
 
@@ -953,6 +1085,10 @@ float blastAt(vec2 p){
     b.z += (at.z - b.z) * Math.min(1, dt * 2);
     b.s = Math.min(1, b.s + strength * dt * 0.35);
     b.r = Math.max(b.r, Math.min(40, 8 + alt * 1.1));
+    this.pushBlasts();
+  }
+
+  pushBlasts() {
     this.blastUniform.value.forEach((v, i) => {
       const z = this.blasts[i];
       if (z) v.set(z.x, z.z, z.r, z.s);
@@ -967,22 +1103,120 @@ float blastAt(vec2 p){
     this.composer.render();
   }
 
-  explode(state) {
-    this.exploded = true;
+  /** Whether the program has just said the ship has crashed. */
+  crashMessage(state) {
+    const S = this.symbols;
+    return ['DEADM', 'ROCKMS', 'OLDMS', 'OLDTLT', 'MACDED'].some((m) => S[m] !== undefined && S[m] === state.sysmes);
+  }
+
+  /** Whether the program has the ship tipped over. */
+  tipMessage(state) {
+    const S = this.symbols;
+    return ['SIDEM', 'ANGLEM', 'BUMPYM'].some((m) => S[m] !== undefined && S[m] === state.flame);
+  }
+
+  startTopple(state) {
+    const v = new T.Vector3(state.horvel / 10, Math.min(0, state.vervel / 10), 0);
+    const fall = state.angle >= 0 ? 1 : -1;
+    const seed = (Math.abs(state.indexl * 0.618034) + (state.t / 1e6) * 0.37) % 1;
+    const home = TERRAIN_X0 + state.indexl * TERRAIN_DX + TERRAIN_DX / 2;
+    this.topple = new Topple(this.car, v, fall, (x, z) => this.solidAt(x, z), seed, home);
+    this.toppleIndex = state.indexl;
+    this.toppleKept = false;
+  }
+
+  /** A fresh Moon: no wrecks on it to remember. */
+  forgetWrecks() {
+    this.topple = null;
+    this.wreckPoses.clear();
+    this.blasts.length = 0;
+    this.halo = null;
+    if (this.blastUniform) this.pushBlasts();
+  }
+
+  /** Remember how the tipped car lies, for the games after. */
+  keepWreck() {
+    if (!this.topple) return;
+    this.toppleKept = true;
+    const g = this.car.group;
+    this.wreckPoses.set(this.toppleIndex, {
+      p: g.position.clone(), q: g.quaternion.clone(), scaleY: this.scaleY, h: this.height(g.position.x),
+      wheels: this.car.wheels.map((w) => w.t),
+    });
+  }
+
+  startCrash(state) {
+    this.flashPower = 0;
+    const v = new T.Vector3(state.horvel / 10, state.vervel / 10, 0);
+    // Onto a car left from before: the nearest one.
+    let aim = null;
+    const S = this.symbols;
+    if (state.sysmes === S.OLDMS || state.sysmes === S.OLDTLT) {
+      const x = this.car.group.position.x;
+      for (const l of this.leftoverAt || []) {
+        if (!l.solid || Math.abs(l.solid.x - x) > 40) continue;
+        if (!aim || Math.abs(l.solid.x - x) < Math.abs(aim.x - x)) aim = { x: l.solid.x, z: l.solid.z, top: l.solid.y + l.solid.hy };
+      }
+    }
+    this.crash = new Crash({ scene: this.scene, car: this.car, kit: this.crashKit, v, random: this.random, solid: (x, z) => this.solidAt(x, z), ground: (x, z) => this.groundAt(x, z), aim });
     // The program digs a crater as it explodes (ALTER): read it soon.
     this.rereadAt = [this.mtime + 0.1, this.mtime + 1.2];
-    const v = new T.Vector3(state.horvel / 10, state.vervel / 10, 0);
-    this.debris = new Debris(this.scene, this.car, v, this.random, (x, z) => this.groundAt(x, z));
     this.exhaust.hide();
-    this.flashAt = this.mtime;
+    this.dust.stop();
+  }
+
+  /** The camera and the rest follow the car as the free body has it. */
+  followCar() {
+    this.pose.x = this.car.group.position.x;
+    this.pose.y = this.car.group.position.y;
+  }
+
+  /** Something the sound, the light or the ground should know about. */
+  happened(e) {
+    this.events.push(e);
+    if (e.kind === 'burst') {
+      this.exploded = true;
+      this.crashAt = e.at.clone();
+      this.flashAt = this.mtime;
+      this.flashPower = e.hard ? 900 : 450;
+      // The ejecta blanket: light ground, in rays, as they come down.
+      const b = { x: e.at.x, z: e.at.z, r: e.hard ? 48 : 18, s: 0 };
+      this.blasts.push(b);
+      if (this.blasts.length > 4) this.blasts.shift();
+      this.halo = { b, s: e.hard ? 0.9 : 0.6, at: this.mtime, over: e.hard ? 4 : 1.6 };
+    }
+    if (e.kind === 'blow' && e.speed > 3) this.dust.kick(e.at, e.speed * 0.6, (x, z) => this.groundAt(x, z), 1);
+  }
+
+  /** The tyres meeting the ground at `speed` ft/s throw a little dust. */
+  tyreDust(speed) {
+    this.car.group.updateMatrixWorld(true);
+    for (const w of this.car.wheels) {
+      if (!w.group.visible) continue;
+      const p = new T.Vector3().setFromMatrixPosition(w.group.matrixWorld);
+      p.y -= w.r;
+      this.dust.kick(p, speed, (x, z) => this.groundAt(x, z), 0.25);
+    }
+  }
+
+  /** What has happened since the last call, for the sound. */
+  takeEvents() {
+    const e = this.events;
+    this.events = [];
+    return e;
   }
 
   /** The diner stands, or lies flattened by a car. */
-  dinerStands(up) {
-    if (this.dinerUp === up) return;
+  dinerStands(up, dt = 0) {
+    // Down in a second when a car comes through the roof; at once when a
+    // new game finds it gone.
+    const was = this.dinerUp;
     this.dinerUp = up;
-    this.diner.scale.y = up ? 1 : 0.3;
-    for (const [i, sc] of this.screens.entries()) sc.parent.rotation.z = up ? 0 : (i ? -1 : 1) * 0.6;
+    const goal = up ? 1 : 0.3;
+    const k = was === undefined || up || !this.exploded ? 1 : Math.min(1, dt * 2.5);
+    this.diner.scale.y += (goal - this.diner.scale.y) * k;
+    const f = (1 - this.diner.scale.y) / 0.7;
+    for (const [i, sc] of this.screens.entries()) sc.parent.rotation.z = (i ? -1 : 1) * 0.6 * f;
   }
 
   /** The terrain as the program has it now: a crash digs a crater. */
@@ -1004,6 +1238,7 @@ float blastAt(vec2 p){
 
   /** A new game: the car is whole again, and the driver in it. */
   reset() {
+    if (this.topple && !this.toppleKept) this.keepWreck();
     if (this.peek) {
       this.rereadTerrain();
       this.buildLeftovers();
@@ -1016,10 +1251,13 @@ float blastAt(vec2 p){
     this.tracker = null;
     this.driver.reset();
     this.car.setCanopy(0);
-    if (this.debris) {
-      this.debris.dispose();
-      this.debris = null;
+    this.topple = null;
+    if (this.crash) {
+      this.crash.dispose();
+      this.crash = null;
     }
+    this.flashAt = undefined;
+    this.halo = null;
     this.dust.clear();
     this.exhaust.hide();
     this.first = true;

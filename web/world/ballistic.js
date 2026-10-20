@@ -21,6 +21,7 @@ uniform float uTime;
 uniform float uG;
 uniform float uStreak;
 varying float vFade;
+varying float vU;
 varying float vAcross;
 varying float vAlong;
 varying float vShade;
@@ -47,6 +48,7 @@ void main() {
   vec3 p = mix(tail, head, corner.x) + side * corner.y * size;
   gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
   float u = age / aLife.y;
+  vU = u;
   // Gone before it reaches the lens: close up a grain is a blur, not a streak.
   float near = smoothstep(5.0, 22.0, length(cameraPosition - head));
   vFade = smoothstep(0.0, 0.06, u) * (1.0 - smoothstep(0.7, 1.0, u)) * near;
@@ -59,7 +61,9 @@ const frag = /* glsl */ `
 uniform vec3 uColor;
 uniform float uOpacity;
 uniform float uAdditive;
+uniform float uCool;
 varying float vFade;
+varying float vU;
 varying float vAcross;
 varying float vAlong;
 varying float vShade;
@@ -67,6 +71,8 @@ void main() {
   if (vFade <= 0.0) discard;
   float a = (1.0 - vAcross * vAcross) * mix(0.25, 1.0, vAlong) * vFade * uOpacity;
   vec3 c = uColor * vShade;
+  // Hot things cool on the way: yellow-white to a dull red to nothing.
+  if (uCool > 0.5) c = mix(c, vec3(0.45, 0.04, 0.0), smoothstep(0.0, 0.7, vU)) * (1.0 - 0.8 * vU);
   gl_FragColor = uAdditive > 0.5 ? vec4(c * a, 1.0) : vec4(c, a);
 }`;
 
@@ -91,7 +97,7 @@ export class Ballistic {
     g.instanceCount = this.n;
     this.uniforms = {
       uTime: { value: 0 }, uG: { value: o.g ?? 5.32 }, uStreak: { value: o.streak ?? 0.03 },
-      uColor: { value: new T.Color(...(o.color || [0.6, 0.57, 0.53])) }, uOpacity: { value: o.opacity ?? 0.5 }, uAdditive: { value: o.additive ? 1 : 0 },
+      uColor: { value: new T.Color(...(o.color || [0.6, 0.57, 0.53])) }, uOpacity: { value: o.opacity ?? 0.5 }, uAdditive: { value: o.additive ? 1 : 0 }, uCool: { value: o.cool ? 1 : 0 },
     };
     this.mesh = new T.Mesh(g, new T.ShaderMaterial({
       uniforms: this.uniforms, vertexShader: vert, fragmentShader: frag,
@@ -103,6 +109,7 @@ export class Ballistic {
     this.next = 0;
     this.dirty = [];
     this.time = 0;
+    this.until = -Infinity; // when the last one thrown is gone
   }
 
   /** Throw one: start, velocity, life (s), size (ft), floor (y below
@@ -115,11 +122,24 @@ export class Ballistic {
     this.life.setXYZW(i, this.time, life, size, floor);
     this.shade.setX(i, shade);
     this.dirty.push(i);
+    this.until = Math.max(this.until, this.time + life);
   }
 
   update(time) {
     this.time = time;
     this.uniforms.uTime.value = time;
+    // Nothing in flight: not drawn at all.
+    this.mesh.visible = time <= this.until;
+    if (this.full) {
+      // Emptied: the whole ring goes up once.
+      for (const a of [this.origin, this.vel, this.life, this.shade]) {
+        a.clearUpdateRanges();
+        a.needsUpdate = true;
+      }
+      this.full = false;
+      this.dirty.length = 0;
+      return;
+    }
     if (!this.dirty.length) return;
     // Upload only the part of the ring that changed.
     let lo = Infinity, hi = -1;
@@ -142,9 +162,10 @@ export class Ballistic {
   /** Forget everything in flight. */
   clear() {
     this.life.array.fill(-1e9);
-    this.life.clearUpdateRanges();
-    this.life.needsUpdate = true;
+    this.next = 0;
     this.dirty.length = 0;
+    this.full = true;
+    this.until = -Infinity;
   }
 }
 
@@ -161,21 +182,27 @@ export function rng(seed = 1) {
 }
 
 const _p = new T.Vector3(), _v = new T.Vector3();
+const G_DUST = 5.32;
 
 /**
- * The sheet of dust the exhaust drives along the ground. In the Apollo
- * films it is not a cloud but a fast, thin, translucent layer streaming
- * out in every direction, the ground seeming to flow; it stops dead with
- * the engine. Drawn as a disc on the ground with streaks running out
- * along it, and a scatter of single grains over it.
+ * The dust the exhaust drives off the ground. In the Apollo films it is
+ * not a cloud but a fast, thin, translucent sheet streaming out in every
+ * direction, the ground seeming to flow; it stops dead with the engine.
+ * Drawn as a disc on the ground with streaks running out along it, a
+ * dense scatter of grains low over it, and coarser stuff the gas digs out
+ * near where it strikes, thrown higher on short arcs. The jets reach the
+ * ground from about sixty feet; the closer, the more.
  */
 export class DustSheet {
   constructor(scene, random) {
-    this.parts = new Ballistic(scene, { n: 32768, color: [1.0, 0.96, 0.9], opacity: 0.05, streak: 0.05 });
+    this.parts = new Ballistic(scene, { n: 65536, color: [1.0, 0.96, 0.9], opacity: 0.15, streak: 0.024 });
+    this.spray = new Ballistic(scene, { n: 32768, color: [0.74, 0.71, 0.66], opacity: 0.5, streak: 0.012 });
+    this.was = 0; // the strength a moment ago, for the jets coming on near the ground
     this.random = random;
     this.carry = 0;
+    this.carrySpray = 0;
     this.uniforms = { uTime: { value: 0 }, uStrength: { value: 0 }, uInner: { value: 4 } };
-    this.disc = new T.Mesh(new T.RingGeometry(0.5, 80, 96, 12), new T.ShaderMaterial({
+    this.disc = new T.Mesh(new T.RingGeometry(0.5, 110, 96, 14), new T.ShaderMaterial({
       uniforms: this.uniforms,
       vertexShader: `varying vec2 vP; void main(){ vP = position.xy; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
       fragmentShader: `uniform float uTime; uniform float uStrength; uniform float uInner; varying vec2 vP;
@@ -190,10 +217,10 @@ export class DustSheet {
           float s1 = n(vec2(a * 300.0, run * 0.05));
           float s2 = n(vec2(a * 700.0 + 7.0, run * 0.12));
           float clump = n(vec2(a * 14.0 + 3.0, run * 0.012));
-          float streak = 0.55 + 0.45 * smoothstep(0.4, 0.95, s1 * 0.55 + s2 * 0.45);
-          float reach = 10.0 + 22.0 * uStrength;
-          float k = smoothstep(uInner * 0.7, uInner * 1.8, r) * (1.0 - smoothstep(reach * 0.3, reach, r));
-          float alpha = uStrength * 0.11 * k * streak * (0.5 + 0.5 * clump);
+          float streak = 0.5 + 0.5 * smoothstep(0.35, 0.95, s1 * 0.55 + s2 * 0.45);
+          float reach = 14.0 + 50.0 * uStrength;
+          float k = smoothstep(uInner * 0.5, uInner * 1.5, r) * (1.0 - smoothstep(reach * 0.25, reach, r));
+          float alpha = uStrength * 0.22 * k * streak * (0.45 + 0.55 * clump);
           if (alpha < 0.003) discard;
           gl_FragColor = vec4(vec3(1.05, 1.0, 0.93), alpha);
         }`,
@@ -223,37 +250,83 @@ export class DustSheet {
     }
     pos.needsUpdate = true;
     this.uniforms.uStrength.value = Math.min(1, Math.sqrt(strength) * 1.3);
-    this.uniforms.uInner.value = (1.5 + alt * 0.45) * scale;
-    this.carry += dt * 30000 * strength;
+    const r0 = (1.5 + alt * 0.4) * scale;
+    this.uniforms.uInner.value = r0;
+    // The sheet: fast and flat, a few degrees, a few at more.
+    this.carry += dt * 52000 * strength;
     const n = Math.floor(this.carry);
     this.carry -= n;
-    const r0 = (1.5 + alt * 0.45) * scale;
     for (let k = 0; k < n; k++) {
       const a = R() * Math.PI * 2;
-      const r = r0 * (0.8 + 1.4 * R());
+      const r = r0 * (0.6 + 1.6 * R());
       _p.set(hit.x + Math.cos(a) * r, 0, hit.z + Math.sin(a) * r);
       const gy = groundAt(_p.x, _p.z);
       _p.y = gy + 0.05;
-      // Fast and flat: a few degrees, a few at more.
-      const el = (R() < 0.85 ? 0.5 + 4 * R() : 5 + 9 * R()) * (Math.PI / 180);
-      const sp = (70 + 200 * R() * R()) * (0.35 + 0.65 * strength);
+      const el = (R() < 0.8 ? 0.5 + 4 * R() : 4.5 + 11 * R()) * (Math.PI / 180);
+      const sp = (60 + 210 * R() * R()) * (0.35 + 0.65 * strength);
       _v.set(Math.cos(a) * Math.cos(el) * sp, Math.sin(el) * sp, Math.sin(a) * Math.cos(el) * sp);
-      this.parts.throw(_p, _v, 0.35 + 0.9 * R(), (0.025 + 0.04 * R()) * Math.sqrt(scale), gy - 0.5, 0.7 + 0.6 * R());
+      this.parts.throw(_p, _v, 0.35 + 1.0 * R(), (0.03 + 0.05 * R()) * Math.sqrt(scale), gy - 0.5, 0.7 + 0.6 * R());
+    }
+    // Coarser grains dug out near the strike, on short, steeper arcs:
+    // the dust that can be seen to go up and come down. The jets coming
+    // on hard close to the ground (lifting off) throw a burst of it.
+    const surge = strength - this.was > 0.35 ? 2200 : 0;
+    this.was += (strength - this.was) * Math.min(1, dt * 4);
+    if (alt < 35 * scale) {
+      this.carrySpray += dt * 7000 * strength + surge;
+      const m = Math.floor(this.carrySpray);
+      this.carrySpray -= m;
+      for (let k = 0; k < m; k++) {
+        const a = R() * Math.PI * 2;
+        const r = r0 * (0.3 + 1.2 * R());
+        _p.set(hit.x + Math.cos(a) * r, 0, hit.z + Math.sin(a) * r);
+        const gy = groundAt(_p.x, _p.z);
+        _p.y = gy + 0.05;
+        const el = (6 + 30 * R()) * (Math.PI / 180);
+        const sp = (8 + 22 * R()) * (0.4 + 0.6 * strength) * (surge ? 1.3 : 1);
+        _v.set(Math.cos(a) * Math.cos(el) * sp, Math.sin(el) * sp, Math.sin(a) * Math.cos(el) * sp);
+        const t = (2 * _v.y) / G_DUST;
+        this.spray.throw(_p, _v, t + 0.2, (0.035 + 0.055 * R()) * Math.sqrt(scale), gy - 0.2, 0.7 + 0.6 * R());
+      }
+    }
+  }
+
+  /**
+   * A blow on the ground at `at`, `speed` ft/s: a ring of dust thrown up
+   * from it. `k` scales how much.
+   */
+  kick(at, speed, groundAt, k = 1) {
+    const R = this.random;
+    const n = Math.min(1600, Math.floor(speed * 70 * k));
+    for (let i = 0; i < n; i++) {
+      const a = R() * Math.PI * 2;
+      const r = 0.3 + 1.2 * R();
+      _p.set(at.x + Math.cos(a) * r, 0, at.z + Math.sin(a) * r);
+      const gy = groundAt(_p.x, _p.z);
+      _p.y = gy + 0.05;
+      const el = (12 + 50 * R()) * (Math.PI / 180);
+      const sp = (1.5 + speed * (0.15 + 0.5 * R() * R()));
+      _v.set(Math.cos(a) * Math.cos(el) * sp, Math.sin(el) * sp, Math.sin(a) * Math.cos(el) * sp);
+      const t = (2 * _v.y) / G_DUST;
+      this.spray.throw(_p, _v, t + 0.2, 0.025 + 0.045 * R(), gy - 0.2, 0.7 + 0.6 * R());
     }
   }
 
   /** No exhaust on the ground this frame: the sheet is gone at once. */
   stop() {
     this.disc.visible = false;
+    this.was = 0;
   }
 
   update(time) {
     this.parts.update(time);
+    this.spray.update(time);
     this.uniforms.uTime.value = time;
   }
 
   clear() {
     this.parts.clear();
+    this.spray.clear();
     this.disc.visible = false;
   }
 }

@@ -114,10 +114,10 @@ const ENDINGS = {
           : `The air ran out at ${fmt(f.airOutAt ?? 0)} ft. Gravity did the rest.`,
     stats: (f) => [['Impact', fmt(Math.abs(f.at.vv), 1), 'ft/s', 'under 60 lands', true], ['Flight time', fmt(secs(f, f.at.t)), 's'], ['Air left', fmt(f.at.air), 'lb', f.at.air <= 0 ? 'none' : '', f.at.air <= 0]],
   },
-  rock: { after: 5, title: () => 'Rock meets Roadster', quip: () => 'Small solar system.', stats: (f) => inFlight(f) },
-  oldship: { after: 5, title: () => 'Parking dispute', quip: () => 'That space was taken.', stats: (f) => inFlight(f) },
-  wreck: { after: 5, title: () => 'Same spot, twice', quip: () => 'Lightning never strikes the same place twice. Roadsters do.', stats: (f) => inFlight(f) },
-  dinerdead: { after: 5, title: () => 'Diner closed', quip: () => 'It stays closed until a New Moon.', stats: (f) => inFlight(f) },
+  rock: { after: 6.5, title: () => 'Rock meets Roadster', quip: () => 'Small solar system.', stats: (f) => inFlight(f) },
+  oldship: { after: 6.5, title: () => 'Parking dispute', quip: () => 'That space was taken.', stats: (f) => inFlight(f) },
+  wreck: { after: 6.5, title: () => 'Same spot, twice', quip: () => 'Lightning never strikes the same place twice. Roadsters do.', stats: (f) => inFlight(f) },
+  dinerdead: { after: 6.5, title: () => 'Diner closed', quip: () => 'It stays closed until a New Moon.', stats: (f) => inFlight(f) },
 };
 
 function touchdown(f) {
@@ -331,9 +331,15 @@ class Page {
     const exploded = this.roadster.exploded;
     this.sound.update(exploded ? 0 : this.roadster.thrustNow, s, 0);
     const alt = (this.alt = this.altitude(s));
+    // The car's own blows and the burst, when the 2026 view has them; the
+    // program's explosion when it is far out and the view has none.
+    for (const e of this.roadster.takeEvents()) {
+      if (e.kind === 'burst' && this.view !== 'tube') this.sound.explosion(e.hard);
+      else if (e.kind === 'blow') this.sound.contact(Math.min(40, e.speed * 2));
+    }
     if (p) {
-      if (s.radius > 0 && p.radius === 0) this.sound.explosion();
-      else if (alt <= 0 && this.altPrev > 0 && s.verdis < 450 && !exploded) this.sound.contact(p.vervel / 10);
+      if (s.radius > 0 && p.radius === 0 && (this.view === 'tube' || !this.roadster.crash)) this.sound.explosion();
+      else if (alt <= 0 && this.altPrev > 0 && s.verdis < 450 && !exploded && !this.roadster.topple) this.sound.contact(p.vervel / 10);
       if (this.roadster.puffing && !this.puffWas) this.sound.puff();
     }
     this.puffWas = this.roadster.puffing;
@@ -751,6 +757,7 @@ class Page {
       this.altPrev = undefined;
       this.phosphor.clear();
       this.phosphor.now = 0;
+      this.roadster.forgetWrecks();
       this.roadster.reset();
       if (!this.arrival) {
         this.arrival = true;

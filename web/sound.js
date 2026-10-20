@@ -125,9 +125,9 @@ export class Sound {
   }
 
   /** The end of the car. */
-  explosion() {
+  explosion(hard = true) {
     if (!this.ac) return;
-    this.burst(1.6, 0.9, 180, 0.5);
+    this.burst(hard ? 1.6 : 1.1, hard ? 0.9 : 0.75, 180, 0.5);
     this.burst(0.5, 0.6, 1200, 0.7);
     this.contact(60);
   }

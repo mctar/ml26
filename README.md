@@ -36,8 +36,14 @@ Live at [moonlander.btrbot.com](https://moonlander.btrbot.com).
   climb out and back in, keyed in the car's frame; `driver.js` runs him
   from the program's own man (PALSY, PALNOR, MOVMAN), early enough to be
   on time; `props.js` the flag and the order; `plume.js` the cold-gas
-  jets, raymarched; `ballistic.js` dust and ejecta on vacuum trajectories;
-  `debris.js` a crash; `prints.js` boot prints.
+  jets, raymarched; `ballistic.js` dust and ejecta on vacuum trajectories,
+  and the sheet of dust the jets drive along the ground; `rigid.js` rigid
+  bodies against the ground (the terrain, the boulders, the diner's roof,
+  cars left from earlier games), with friction and wheels that roll;
+  `topple.js` the car going over when the program says it has tipped,
+  falling the way a car falls and lying where it came to rest for the
+  games after; `debris.js` a crash, from the car meeting what it hit to
+  the pieces at rest; `prints.js` boot prints.
 - `web/lab.html`: a page for checking the 2026 view, not linked from the
   site. It replays flights recorded by `tools/lab/record.mjs` through the
   real view frame by frame, and measures every frame: the driver's soles
