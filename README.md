@@ -19,7 +19,7 @@ Live at [moonlander.btrbot.com](https://moonlander.btrbot.com).
 - `web/`: the page. `engine/engine.js` drives the WebAssembly through
   Binaryen's Asyncify, which lets a program that never returns pause for a
   frame; `phosphor.js` is the recovery's P39 phosphor model on the GPU;
-  `roadster.js` is the 2026 view (three.js: the terrain from the TERAIN
+  `roadster.js` is the 2026 view (three.js: the land round the TERAIN
   table, the diner, what earlier games left behind, the camera, with the
   pieces from `world/`); `sound.js` is what the driver hears; `main.js` paces the
   machine against the clock, keeps the two views, turns the controls into
@@ -29,7 +29,14 @@ Live at [moonlander.btrbot.com](https://moonlander.btrbot.com).
   its own card; Play again runs through the program's own wait at speed
   and keeps the Moon, with everything earlier flights left on it. `vendor/three.js` is a bundled subset of three.js, built
   from `vendor/three-entry.js` with esbuild.
-- `web/world/`: the pieces of the 2026 view. `car.js` is the Roadster,
+- `web/world/`: the pieces of the 2026 view. `land.js` is the country
+  round the flight line: Burness's skyline exact along the line, his
+  peaks spreading into massifs away from it, plains in front, highlands
+  behind, craters of every size, and the curve of the Moon out to the
+  horizon, in rings of mesh that grow coarser away from the line;
+  `landworker.js` works out its heights and the sunlight on each of its
+  points (the shadows of mountains miles away) off the page's thread.
+  `car.js` is the Roadster,
   lofted from a few profiles, on springs that keep it on the ground;
   `astronaut.js` the driver, posed by two-bone inverse kinematics, with a
   low-gravity lope that plants his feet where they land; `choreo.js` the

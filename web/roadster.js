@@ -18,6 +18,7 @@ import { DustSheet, rng } from './world/ballistic.js';
 import { Crash, CrashKit } from './world/debris.js';
 import { Topple, carBody, poseCar } from './world/topple.js';
 import { STEP } from './world/rigid.js';
+import { Land, landRings, ringIndex, ringChunks, landSurfaces } from './world/land.js';
 import { Prints } from './world/prints.js';
 import { makeEnvironment } from './world/env.js';
 import { hash, noise2 as noise, fbm2 as fbm } from './world/shape.js';
@@ -85,12 +86,12 @@ export class Roadster {
     this.renderer = new T.WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = T.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = T.PCFShadowMap;
     this.renderer.toneMapping = T.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.1;
     this.scene = new T.Scene();
     this.scene.background = new T.Color(0x000000);
-    this.camera = new T.PerspectiveCamera(42, 4 / 3, 1, 200000);
+    this.camera = new T.PerspectiveCamera(42, 4 / 3, 1, 1500000);
     this.camTarget = new T.Vector3();
     this.camPos = new T.Vector3();
     this.first = true;
@@ -144,7 +145,10 @@ export class Roadster {
   lights() {
     // A low sun, hard light, no air: long shadows, black sky.
     this.sun = new T.DirectionalLight(0xfff4e0, 3.0);
-    this.sunDir = new T.Vector3(-0.45, 0.5, 0.75).normalize();
+    // From the front left, sixteen degrees up: about where it stood for the
+    // Apollo landings, which were timed for long shadows to judge by.
+    const el = T.MathUtils.degToRad(16), az = Math.atan2(0.75, -0.45);
+    this.sunDir = new T.Vector3(Math.cos(el) * Math.cos(az), Math.sin(el), Math.cos(el) * Math.sin(az));
     this.sun.position.copy(this.sunDir).multiplyScalar(1000);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
@@ -171,7 +175,7 @@ export class Roadster {
       // Points on a far sphere, more of them near the horizon.
       const u = R(), v = R();
       const th = 2 * Math.PI * u, ph = Math.acos(1 - v * 1.15);
-      const r = 150000;
+      const r = 1200000;
       pos[i * 3] = r * Math.sin(ph) * Math.cos(th);
       pos[i * 3 + 1] = r * Math.cos(ph) + 2000;
       pos[i * 3 + 2] = r * Math.sin(ph) * Math.sin(th);
@@ -226,6 +230,8 @@ export class Roadster {
     const h = new Int16Array(TERRAIN_N);
     for (let i = 0; i < TERRAIN_N; i++) h[i] = (peek(symbols.TERAIN + 2 * i) << 16) >> 16;
     this.terrain = h;
+    this.land = new Land(h, TERRAIN_X0, TERRAIN_DX);
+    this.land.setScale(this.scaleY);
     this.features = this.readFeatures();
     this.buildTerrain();
     this.buildFeatures();
@@ -406,6 +412,7 @@ export class Roadster {
   setScale(sy) {
     if (sy === this.scaleY) return;
     this.scaleY = sy;
+    this.land.setScale(sy);
     this.fillTerrain();
     this.placeFeatures();
     this.placeLeftovers();
@@ -414,65 +421,39 @@ export class Roadster {
     this.first = true; // the camera cuts, as the 1973 display did
   }
 
-  /** Height off the plane. The profile is a crest: level for 60 feet
-   * either side, falling towards the camera in front, fading into smoother
-   * hills behind. The silhouette the camera sees is Burness's. */
+  /** Height off the plane: Burness's profile along it, the country
+   * round it from world/land.js. */
   heightAt(x, z) {
-    const h0 = this.height(x);
-    const d = Math.max(0, Math.abs(z) - 60);
-    if (d === 0) return h0;
-    // A lightly smoothed profile for the slopes, so each 32-foot column
-    // does not become its own ribbon; the crest itself stays exact.
-    let h1 = 0;
-    for (let k = -3; k <= 3; k++) h1 += this.height(x + k * 32);
-    h1 /= 7;
-    if (z > 0) {
-      const w = Math.min(1, d / 1400);
-      const w2 = w * w * (3 - 2 * w);
-      const ws = Math.min(1, d / 400);
-      const base = h0 * (1 - ws) + h1 * ws;
-      const far = Math.min(1, Math.max(0, d - 1400) / 20000);
-      const floor = Math.min(base, h1 * 0.15) - 40 + (fbm(x / 420, z / 420 + 7.7) - 0.5) * 60 * w + (fbm(x / 6000 + 1.3, z / 6000) - 0.5) * 1200 * far;
-      return base * (1 - w2) + floor * w2;
-    }
-    let hs = 0;
-    for (let k = -4; k <= 4; k++) hs += this.height(x + k * 64);
-    hs /= 9;
-    const w = Math.min(1, d / 1200);
-    const w2 = w * w * (3 - 2 * w);
-    const ws = Math.min(1, d / 300);
-    const base = h0 * (1 - ws) + h1 * ws;
-    const far = Math.min(1, d / 4000);
-    const hills = (fbm(x / 2200 + 3.1, z / 2200) - 0.5) * 2600 * far + (fbm(x / 500, z / 500 + 7.7) - 0.5) * 160 * w;
-    return base * (1 - w2) + (hs * 0.8 + 300 * far + hills) * w2;
+    return this.land.height(x, z);
   }
 
   buildTerrain() {
-    const cols = TERRAIN_N;
-    // Rows in z: dense near the plane, sparse far away. Behind is far.
-    this.zs = [-90000, -60000, -40000, -24000, -16000, -10000, -7000, -4800, -3400, -2400, -1700, -1200, -850, -600, -420, -300, -200, -130, -80, -60, 0, 60, 90, 130, 190, 270, 380, 520, 700, 950, 1300, 1800, 2600, 3800, 6000, 10000, 18000, 32000, 60000];
-    const rows = this.zs.length;
-    const pos = new Float32Array(cols * rows * 3);
-    const uv = new Float32Array(cols * rows * 2);
-    let ku = 0;
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        uv[ku++] = c / (cols - 1);
-        uv[ku++] = r / (rows - 1);
+    // Rings of mesh round the line, finest on it (world/land.js); their
+    // heights are worked out off the page's thread, for both of the
+    // program's scales, and swapped in as they come.
+    this.rings = landRings(TERRAIN_X0);
+    const geos = [];
+    for (const [i, ring] of this.rings.entries()) {
+      for (const { c0, c1 } of ringChunks(ring, i)) {
+        const w = c1 - c0 + 1, rows = ring.zs.length;
+        const pos = new Float32Array(w * rows * 3);
+        let k = 0;
+        for (let r = 0; r < rows; r++) {
+          for (let c = c0; c <= c1; c++) {
+            pos[k++] = ring.xs[c];
+            pos[k++] = 0;
+            pos[k++] = ring.zs[r];
+          }
+        }
+        const g = new T.BufferGeometry();
+        g.setAttribute('position', new T.BufferAttribute(pos, 3));
+        g.setAttribute('normal', new T.BufferAttribute(new Float32Array(w * rows * 3), 3));
+        g.setAttribute('sunVis', new T.BufferAttribute(new Float32Array(w * rows).fill(1), 1));
+        g.setIndex(ringIndex(ring, c0, c1));
+        g.userData = { ring: i, c0, c1 };
+        geos.push(g);
       }
     }
-    const idx = [];
-    for (let r = 0; r < rows - 1; r++) {
-      for (let c = 0; c < cols - 1; c++) {
-        const a = r * cols + c, b = a + 1, d = a + cols, e = d + 1;
-        idx.push(a, d, b, b, d, e);
-      }
-    }
-    const g = new T.BufferGeometry();
-    g.setAttribute('position', new T.BufferAttribute(pos, 3).setUsage(T.DynamicDrawUsage));
-    g.setAttribute('uv', new T.BufferAttribute(uv, 2));
-    g.setIndex(idx);
-    this.groundGeometry = g;
     const mat = new T.MeshStandardMaterial({ color: 0x8a8884, roughness: 0.96, metalness: 0.0 });
     // Where the exhaust has blown the fine dust away: brighter ground.
     this.blastUniform = { value: [0, 1, 2, 3].map(() => new T.Vector4(0, 0, 1, 0)) };
@@ -484,12 +465,25 @@ export class Roadster {
     mat.onBeforeCompile = (sh) => {
       sh.uniforms.uBlast = this.blastUniform;
       sh.uniforms.uSunDir = this.sunUniform;
+      // The sunlight worked out for each vertex (world/land.js): the
+      // shadows of the land on itself, out to the horizon.
       sh.vertexShader = sh.vertexShader
-        .replace('#include <common>', '#include <common>\nvarying vec3 vW;')
-        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvW = (modelMatrix * vec4(position, 1.0)).xyz;');
+        .replace('#include <common>', '#include <common>\nvarying vec3 vW;\nattribute float sunVis;\nvarying float vSunVis;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvW = (modelMatrix * vec4(position, 1.0)).xyz;\nvSunVis = sunVis;');
+      // The Moon's own way with light (Lommel-Seeliger, mostly): its dust
+      // is as bright tilted toward the sun as flat, and brighter seen
+      // from low down, so the ground reads as one even sunlit sheet cut
+      // by black shadow, as in the photographs, not modelled in greys.
+      const lunar = T.ShaderChunk.lights_physical_pars_fragment.replace(
+        'vec3 irradiance = dotNL * directLight.color;',
+        `float dotNVm = saturate( dot( geometryNormal, geometryViewDir ) );
+        vec3 irradiance = mix( dotNL, 1.1 * dotNL / ( dotNL + dotNVm + 0.08 ), 0.65 ) * directLight.color * vSunVis;`,
+      );
       sh.fragmentShader = sh.fragmentShader
+        .replace('#include <lights_physical_pars_fragment>', lunar)
         .replace('#include <common>', `#include <common>
 varying vec3 vW;
+varying float vSunVis;
 uniform vec4 uBlast[4];
 uniform vec3 uSunDir;
 float h21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -511,6 +505,28 @@ float crater(vec2 p, float cell, float rmin, float rmax){
   }
   return h;
 }
+// Craters in feet: a bowl a third as deep as it is wide across the
+// radius, a rim, a few per cell.
+float craterFt(vec2 p, float cell, float rmin, float rmax, float keep){
+  vec2 i = floor(p / cell), f = fract(p / cell);
+  float h = 0.0;
+  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+    vec2 g = vec2(float(x), float(y));
+    vec2 c = i + g;
+    if (h21(c + 3.3) > keep) continue;
+    vec2 centre = g + vec2(h21(c + 9.1), h21(c + 27.7)) * 0.8 + 0.1;
+    float rad = mix(rmin, rmax, pow(h21(c + 5.5), 2.0));
+    float d = length(f - centre) * cell / rad;
+    if (d < 2.2) h += rad * (d < 1.0 ? -0.33 * (1.0 - d * d) + 0.07 : 0.07 * pow(max(0.0, 2.2 - d) / 1.2, 2.5));
+  }
+  return h;
+}
+// The land seen from far off: craters from a few hundred feet to a mile,
+// and a slow swell, for the light to catch where the mesh is coarse.
+float reliefFar(vec2 p){
+  return craterFt(p + 300.0, 500.0, 25.0, 110.0, 0.6) + craterFt(p - 2200.0, 1800.0, 90.0, 300.0, 0.5)
+       + vnoise(p * 0.0011) * 60.0 + vnoise(p * 0.004 + 5.0) * 18.0;
+}
 float relief(vec2 p){
   return vnoise(p * 1.7) * 0.06 + vnoise(p * 0.45 + 3.1) * 0.25 + vnoise(p * 0.09 + 9.2) * 1.2
        + crater(p, 60.0, 5.0, 14.0) * 2.2 + crater(p + 1000.0, 300.0, 25.0, 70.0) * 6.0;
@@ -531,20 +547,34 @@ float blastAt(vec2 p){
 {
   float dist = length(vViewPosition);
   float k = (1.0 - smoothstep(600.0, 6000.0, dist)) * 0.9;
+  float kf = smoothstep(900.0, 4000.0, dist) * (1.0 - smoothstep(50000.0, 120000.0, dist)) * 0.85;
+  vec2 grad = vec2(0.0);
+  vec2 p = vW.xz;
   if (k > 0.001) {
-    vec2 p = vW.xz; float e = 0.4;
+    float e = 0.4;
     float h0 = relief(p);
-    float hx = relief(p + vec2(e, 0.0)) - h0;
-    float hz = relief(p + vec2(0.0, e)) - h0;
-    vec3 n = normalize(vec3(-hx / e, 1.0, -hz / e));
+    grad += k * vec2(relief(p + vec2(e, 0.0)) - h0, relief(p + vec2(0.0, e)) - h0) / e;
+  }
+  if (kf > 0.001) {
+    float e = 6.0 + dist * 0.0012;
+    float h0 = reliefFar(p);
+    grad += kf * vec2(reliefFar(p + vec2(e, 0.0)) - h0, reliefFar(p + vec2(0.0, e)) - h0) / e;
+  }
+  if (k + kf > 0.001) {
+    vec3 n = normalize(vec3(-grad.x, 1.0, -grad.y));
     vec3 nv = normalize((viewMatrix * vec4(n, 0.0)).xyz);
-    normal = normalize(mix(normal, normalize(normal + (nv - normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz))), k));
+    normal = normalize(normal + (nv - normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz)));
   }
 }`)
         .replace('#include <color_fragment>', `#include <color_fragment>
 {
   float blast = blastAt(vW.xz);
-  float g = h21(floor(vW.xz * 3.0)) * 0.25 + vnoise(vW.xz * 0.12) * 0.45 + vnoise(vW.xz * 0.012 + 4.0) * 0.3;
+  // Grain close to, fading out before it can shimmer; patches of lighter
+  // and darker ground at every size; fresh crater rims a little bright.
+  float dd = length(cameraPosition - vW);
+  float fine = 1.0 - smoothstep(150.0, 1500.0, dd);
+  float g = (h21(floor(vW.xz * 3.0)) * 0.25 - 0.125) * fine + 0.125 + vnoise(vW.xz * 0.12) * 0.45 + vnoise(vW.xz * 0.012 + 4.0) * 0.3;
+  g += (vnoise(vW.xz * 0.0006 + 2.0) - 0.5) * 0.25 + (vnoise(vW.xz * 0.00009 + 7.0) - 0.5) * 0.35;
   g = mix(g, 0.55, blast * 0.6);
   diffuseColor.rgb *= (0.84 + 0.3 * g) * (1.0 + 0.24 * blast);
   // Looking down-sun the grains hide their own shadows: a bright patch
@@ -554,15 +584,24 @@ float blastAt(vec2 p){
   diffuseColor.rgb *= 1.0 + 0.3 * pow(o, 24.0) + 0.1 * pow(o, 4.0);
 }`);
     };
-    const mesh = new T.Mesh(g, mat);
-    mesh.receiveShadow = true;
-    mesh.castShadow = false;
-    this.scene.add(mesh);
-    this.ground = mesh;
+    this.groundMeshes = geos.map((g) => {
+      const mesh = new T.Mesh(g, mat);
+      mesh.receiveShadow = true;
+      // The far rings are past any shadow camera; their shadows are in
+      // the sunlight worked out for them.
+      mesh.castShadow = g.userData.ring < 3;
+      mesh.visible = false; // until its heights come
+      this.scene.add(mesh);
+      return mesh;
+    });
+    this.landCache = new Map(); // scale -> ring surfaces
+    this.landAsk = 0;
+    this.landReady = new Promise((done) => (this.landDone = done));
+    this.askLand();
 
     // The 1973 vectors: a faint phosphor line along the profile.
     const lg = new T.BufferGeometry();
-    lg.setAttribute('position', new T.BufferAttribute(new Float32Array(cols * 3), 3).setUsage(T.DynamicDrawUsage));
+    lg.setAttribute('position', new T.BufferAttribute(new Float32Array(TERRAIN_N * 3), 3).setUsage(T.DynamicDrawUsage));
     this.traceGeometry = lg;
     const lm = new T.LineBasicMaterial({ color: new T.Color(0.35, 1.0, 0.45), transparent: true, opacity: 0.55, blending: T.AdditiveBlending, depthWrite: false });
     this.trace = new T.Line(lg, lm);
@@ -604,25 +643,70 @@ float blastAt(vec2 p){
     this.pebbles.instanceMatrix.needsUpdate = true;
   }
 
-  /** Heights into the terrain mesh and the trace, at the current scale. */
-  fillTerrain() {
-    const cols = TERRAIN_N, rows = this.zs.length;
-    const pos = this.groundGeometry.attributes.position.array;
-    let k = 0;
-    for (let r = 0; r < rows; r++) {
-      const z = this.zs[r];
-      for (let c = 0; c < cols; c++) {
-        const x = TERRAIN_X0 + c * TERRAIN_DX;
-        pos[k++] = x;
-        pos[k++] = this.heightAt(x, z);
-        pos[k++] = z;
+  /** Ask for the land's surfaces at both scales, from the program's
+   * heights as they are now. */
+  askLand() {
+    const id = ++this.landAsk;
+    this.landCache.clear();
+    const got = ({ id: from, scale, rings, lit = true }) => {
+      if (from !== this.landAsk) return; // the heights have changed since
+      if (!lit && this.landCache.has(scale)) return;
+      rings.lit = lit;
+      this.landCache.set(scale, rings);
+      if (scale === this.scaleY) this.fillTerrain();
+    };
+    if (!this.landWorker && typeof Worker !== 'undefined') {
+      try {
+        this.landWorker = new Worker(new URL('./world/landworker.js', import.meta.url), { type: 'module' });
+        this.landWorker.onmessage = (ev) => got(ev.data);
+        this.landWorker.onerror = () => {
+          // No worker after all: the page works them out itself.
+          this.landWorker = null;
+          this.askLand();
+        };
+      } catch (e) {
+        this.landWorker = null;
       }
     }
-    this.groundGeometry.attributes.position.needsUpdate = true;
-    this.groundGeometry.computeVertexNormals();
-    this.groundGeometry.computeBoundingSphere();
+    // The scale on show first, its shape before its sunlight.
+    for (const scale of [this.scaleY, this.scaleY === 1 ? 0.25 : 1]) {
+      const terrain = Int16Array.from(this.terrain);
+      const sun = this.sunDir.toArray();
+      if (this.landWorker) this.landWorker.postMessage({ id, terrain, x0: TERRAIN_X0, dx: TERRAIN_DX, scale, sun, early: scale === this.scaleY });
+      else got({ id, scale, rings: landSurfaces(terrain, TERRAIN_X0, TERRAIN_DX, scale, sun) });
+    }
+  }
+
+  /** The land's mesh and the trace at the current scale. */
+  fillTerrain() {
+    const rings = this.landCache && this.landCache.get(this.scaleY);
+    if (rings && this.groundMeshes) {
+      for (const mesh of this.groundMeshes) {
+        const g = mesh.geometry, { ring, c0, c1 } = g.userData;
+        const src = rings[ring], cols = this.rings[ring].xs.length, rows = this.rings[ring].zs.length;
+        const pos = g.attributes.position.array, nor = g.attributes.normal.array, sun = g.attributes.sunVis.array;
+        let k = 0;
+        for (let r = 0; r < rows; r++) {
+          for (let c = c0; c <= c1; c++, k++) {
+            const j = r * cols + c;
+            pos[k * 3 + 1] = src.y[j];
+            nor[k * 3] = src.n[j * 3];
+            nor[k * 3 + 1] = src.n[j * 3 + 1];
+            nor[k * 3 + 2] = src.n[j * 3 + 2];
+            sun[k] = src.sun ? src.sun[j] : 1;
+          }
+        }
+        g.attributes.position.needsUpdate = true;
+        g.attributes.normal.needsUpdate = true;
+        g.attributes.sunVis.needsUpdate = true;
+        g.computeBoundingSphere();
+        mesh.visible = true;
+      }
+      this.landShown = this.scaleY;
+      if (rings.lit) this.landDone();
+    }
     const lp = this.traceGeometry.attributes.position.array;
-    for (let c = 0; c < cols; c++) {
+    for (let c = 0; c < TERRAIN_N; c++) {
       lp[c * 3] = TERRAIN_X0 + c * TERRAIN_DX;
       lp[c * 3 + 1] = this.terrain[c] * this.scaleY + 1.5;
       lp[c * 3 + 2] = 0;
@@ -630,6 +714,24 @@ float blastAt(vec2 p){
     this.traceGeometry.attributes.position.needsUpdate = true;
     this.traceGeometry.computeBoundingSphere();
     if (this.pebbles) this.placePebbles();
+  }
+
+  /** Leave everything but the land out of the shadow map, or put it back. */
+  coarseShadows(on) {
+    if (on === !!this.shadowsOff) return;
+    if (on) {
+      const land = new Set(this.groundMeshes);
+      this.shadowsOff = [];
+      this.scene.traverse((o) => {
+        if (o.castShadow && !o.isLight && !land.has(o)) {
+          o.castShadow = false;
+          this.shadowsOff.push(o);
+        }
+      });
+    } else {
+      for (const o of this.shadowsOff) o.castShadow = true;
+      this.shadowsOff = null;
+    }
   }
 
   buildFeatures() {
@@ -1023,17 +1125,30 @@ float blastAt(vec2 p){
     this.camera.position.copy(this.camPos);
     this.camera.lookAt(this.camTarget);
     this.camera.near = Math.max(0.5, Math.min(d, d2) * 0.01);
-    this.camera.far = 400000;
+    this.camera.far = 1500000;
     this.camera.updateProjectionMatrix();
 
     // The sun's shadow camera follows what is being looked at.
-    const sunR = close ? T.MathUtils.clamp(alt * 1.2 + 70, 70, 900) : T.MathUtils.clamp(alt * 1.2 + 200, 120, 4000);
+    // Far out it takes in all the country in view, so the mountains throw
+    // their shadows across it; close in, the car and the ground round it.
+    const sunR = close ? T.MathUtils.clamp(alt * 1.2 + 70, 70, 900) : T.MathUtils.clamp(dist * 1.3, 3000, 60000);
+    const back = close ? sunR * 3 : Math.max(sunR * 3, 40000);
     this.sunTarget.position.copy(this.camTarget);
-    this.sun.position.copy(this.sunTarget.position).addScaledVector(this.sunDir, sunR * 3);
+    this.sun.position.copy(this.sunTarget.position).addScaledVector(this.sunDir, back);
     const sc = this.sun.shadow.camera;
     sc.left = -sunR; sc.right = sunR; sc.top = sunR; sc.bottom = -sunR;
-    sc.near = sunR; sc.far = sunR * 6;
+    sc.near = Math.max(1, back - 3 * sunR - 20000 * (close ? 0 : 1));
+    sc.far = back + 3 * sunR;
     sc.updateProjectionMatrix();
+    // Bias by the size of a shadow texel, so the ground does not shadow itself.
+    const texel = (2 * sunR) / this.sun.shadow.mapSize.x;
+    this.sun.shadow.normalBias = Math.max(0.04, texel * 1.2);
+    // When a texel is wider than a car, only the land's shadows show: the
+    // rest is left out of the shadow map rather than drawn into it for
+    // nothing.
+    this.coarseShadows(texel > 4);
+    // And close in, only the finest ring is under the shadow camera.
+    if (this.groundMeshes) for (const m of this.groundMeshes) m.castShadow = m.geometry.userData.ring < (close ? 1 : 3);
 
     // Exhaust. THRUST stays where it was when the program stops flying,
     // so on the ground there is none, whatever it says.
@@ -1222,17 +1337,56 @@ float blastAt(vec2 p){
   /** The terrain as the program has it now: a crash digs a crater. */
   rereadTerrain() {
     if (!this.peek) return;
-    let changed = false;
+    let lo = TERRAIN_N, hi = -1;
     for (let i = 0; i < TERRAIN_N; i++) {
       const v = (this.peek(this.symbols.TERAIN + 2 * i) << 16) >> 16;
       if (v !== this.terrain[i]) {
         this.terrain[i] = v;
-        changed = true;
+        lo = Math.min(lo, i);
+        hi = i;
       }
     }
-    if (changed) {
+    if (hi >= 0) {
+      this.land.refresh();
+      if (hi - lo < 40) this.patchLand(lo, hi);
+      this.askLand();
       this.fillTerrain();
       this.placeFeatures();
+    }
+  }
+
+  /** A crater dug into the program's heights shows at once: the finest
+   * ring round it is worked out here, until the whole land comes back
+   * from the worker. */
+  patchLand(lo, hi) {
+    if (!this.groundMeshes || this.landShown !== this.scaleY) return;
+    const ring = this.rings[0], zs = ring.zs, land = this.land;
+    const xa = TERRAIN_X0 + lo * TERRAIN_DX - 640, xb = TERRAIN_X0 + hi * TERRAIN_DX + 640;
+    const h = (x, z) => land.height(x, z, 0);
+    for (const mesh of this.groundMeshes) {
+      const g = mesh.geometry, { ring: ri, c0, c1 } = g.userData;
+      if (ri !== 0 || ring.xs[c1] < xa || ring.xs[c0] > xb) continue;
+      const w = c1 - c0 + 1;
+      const pos = g.attributes.position.array, nor = g.attributes.normal.array;
+      for (let r = 1; r < zs.length - 1; r++) {
+        const z = zs[r];
+        if (Math.abs(z) > 320) continue;
+        for (let c = c0; c <= c1; c++) {
+          const x = ring.xs[c];
+          if (x < xa || x > xb) continue;
+          const k = r * w + (c - c0);
+          pos[k * 3 + 1] = h(x, z);
+          // As the rings' own normals: differences across the grid.
+          const gx = (h(x + ring.cell, z) - h(x - ring.cell, z)) / (2 * ring.cell);
+          const gz = (h(x, zs[r + 1]) - h(x, zs[r - 1])) / (zs[r + 1] - zs[r - 1]);
+          const l = Math.hypot(gx, 1, gz);
+          nor[k * 3] = -gx / l;
+          nor[k * 3 + 1] = 1 / l;
+          nor[k * 3 + 2] = -gz / l;
+        }
+      }
+      g.attributes.position.needsUpdate = true;
+      g.attributes.normal.needsUpdate = true;
     }
   }
 
