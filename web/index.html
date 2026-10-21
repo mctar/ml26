@@ -152,6 +152,11 @@
   #intro .go .touch { display: none; }
   @media (hover: none) { #intro .go .key { display: none; } #intro .go .touch { display: inline; } }
   #intro:not(.tube) .cap { opacity: 0; }
+  #intro .foot { position: absolute; left: 16px; right: 16px; bottom: max(18px, calc(env(safe-area-inset-bottom) + 12px)); margin: 0; text-align: center; font-size: 12px; line-height: 1.5; color: #7b7c77; opacity: 0; transition: opacity 0.9s; pointer-events: none; }
+  #intro .foot.on { opacity: 1; pointer-events: auto; }
+  #intro .foot a, #about .foot a { color: #b9bab4; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: #4a4b47; }
+  #intro .foot a:hover, #about .foot a:hover { color: var(--fg); }
+  #about .foot { margin-top: 36px; padding-top: 14px; border-top: 1px solid #262724; font-size: 13px; color: var(--dim); }
   #intro .sub { position: absolute; left: 16px; right: 16px; margin: 0; text-align: center; font-size: clamp(13px, 1.5vw, 18px); font-weight: 400; letter-spacing: 0.16em; color: #ecece6; opacity: 0; text-shadow: 0 0 18px rgba(0,0,0,0.9); }
   #tube.off { animation: tubeoff 0.42s ease-in forwards; transform-origin: 50% 50%; }
   @keyframes tubeoff {
@@ -229,6 +234,7 @@
   <p class="cap"><b>Moonlander, 1973</b>Jack Burness&rsquo;s program, running on a modelled DEC GT40</p>
   <p class="sub" id="intro-sub">Roadster edition</p>
   <p class="go" id="intro-go"><span class="key">Press any key</span><span class="touch">Tap to begin</span></p>
+  <p class="foot" id="intro-foot">A poka-yoke build by <a href="https://gervilabs.com/" target="_blank" rel="noopener">Gervi Labs</a>, created by Thordur Arnason.</p>
 </div>
 <div id="about" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="about-title">
   <button class="close" id="about-close">Close</button>
@@ -263,6 +269,7 @@
     <h2>Sources</h2>
     <p><a href="https://github.com/mctar/moonlander">The recovery</a>, with the hardware model and the journal. <a href="https://github.com/mctar/ml26">This site's source</a>. The car and the diner are drawn from public photographs and carry no marks; nothing here is affiliated with or endorsed by anyone who makes cars. The quotations are on the record: the unveil of 15 October 2026 as reported by TechCrunch and Euronews, the 2018 launch as recorded on Wikipedia. The Earth is NASA&rsquo;s Blue Marble, with its clouds (NASA Goddard Space Flight Center, Reto St&ouml;ckli). The title is set in the GT40&rsquo;s own character generator.</p>
     <p>MIT licence. Moonlander is Jack Burness's work.</p>
+    <p class="foot">A poka-yoke build by <a href="https://gervilabs.com/" target="_blank" rel="noopener">Gervi Labs</a>, created by Thordur Arnason.</p>
   </article>
 </div>
 <div id="guide" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="guide-title">

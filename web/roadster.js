@@ -1123,7 +1123,7 @@ float blastAt(vec2 p){
     const d = close ? T.MathUtils.clamp(Math.max(alt * 0.6 + 55, fit), 55, 900) : T.MathUtils.clamp(Math.max(alt * 1.9 + 900, fit), 1200, 36000);
     // The car is drawn larger when the camera is far, so it can be seen.
     // (On a cut the camera has not moved yet: go by where it is going.)
-    const dist = this.first ? d : this.camPos.distanceTo(this.camTarget) || d;
+    const dist = this.camRig ? this.camRig.dist : this.first ? d : this.camPos.distanceTo(this.camTarget) || d;
     const scale = Math.max(1, dist / 500);
     this.car.group.visible = !this.exploded;
     if (!this.topple && !this.crash) {
@@ -1182,6 +1182,13 @@ float blastAt(vec2 p){
       look.copy(cam).addScaledVector(slerpDir(vH, vC, e), len);
       fov = Math.exp(Math.log(hero.fov) + (Math.log(fov) - Math.log(hero.fov)) * e);
       near = Math.max(0.5, Math.min(0.3 * cam.distanceTo(c), near));
+      kc = 1;
+    }
+    if (this.camRig) {
+      // For the lab: a camera set from where the car is this frame.
+      this.camRig.place(this, cam, look);
+      fov = this.camRig.fov || fov;
+      near = Math.max(0.5, Math.min(near, 0.3 * this.camRig.dist));
       kc = 1;
     }
     if (this.camera.fov !== fov) this.camera.fov = fov;

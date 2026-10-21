@@ -365,6 +365,7 @@ class Page {
       i.goAt = i.clock;
       $('intro').classList.remove('wait');
       $('intro-go').classList.remove('on');
+      $('intro-foot').classList.remove('on');
       this.sound.swell(PULL + 1.5);
     } else if (i.full) i.skip = true;
     return true;
@@ -427,7 +428,11 @@ class Page {
       return;
     }
     const full = i.full && !i.skip;
-    const box = this.title.layout(0.72);
+    // The title at 0.72 of the height, higher if the subtitle, the prompt
+    // and the footer would not fit under it.
+    let box = this.title.layout(0.72);
+    const below = box.height / 2 + box.pitch * 2.2 + 46 + 30 + 56;
+    if (0.72 * window.innerHeight + below > window.innerHeight) box = this.title.layout(Math.max(0.5, 1 - below / window.innerHeight));
     const sub = $('intro-sub'), go = $('intro-go');
     sub.style.top = `${box.top + box.height + box.pitch * 2.2}px`;
     sub.textContent = this.demo ? this.demo.name : 'Roadster edition';
@@ -452,6 +457,7 @@ class Page {
     if (full && i.goAt === undefined && i.shown && hero > 1.4 && !go.classList.contains('on')) {
       go.style.top = `${box.top + box.height + box.pitch * 2.2 + 46}px`;
       go.classList.add('on');
+      $('intro-foot').classList.add('on');
       $('intro').classList.add('wait');
     }
     // The title: struck, whitening with the scene, gone as the camera
@@ -478,6 +484,7 @@ class Page {
     $('intro').classList.remove('wait');
     $('intro-sub').style.opacity = '0';
     $('intro-go').classList.remove('on');
+    $('intro-foot').classList.remove('on');
     $('hud').classList.remove('away');
     if (!this.briefed && !this.replay) {
       this.briefed = true;
@@ -1087,7 +1094,11 @@ class Page {
     for (const id of ['guide', 'about', 'demo']) $(id).addEventListener('click', (ev) => {
       if (ev.target === ev.currentTarget) this.hide(id);
     });
-    $('intro').addEventListener('click', () => this.introKey());
+    $('intro').addEventListener('click', (ev) => {
+      // The footer's link opens; it does not start the flight.
+      if (ev.target.closest('a')) return;
+      this.introKey();
+    });
 
     this.held = new Set();
     window.addEventListener('keydown', (ev) => {
@@ -1101,6 +1112,8 @@ class Page {
       // In the opening a key moves it on, and does nothing else; the sound
       // switch and the guide work as ever.
       const i = this.intro;
+      // Enter on the footer's link follows the link; any other key flies.
+      if (ev.key === 'Enter' && ev.target.closest && ev.target.closest('#intro a')) return;
       if (i && (i.phase === 'tube' || i.full) && !['KeyM', 'KeyH'].includes(ev.code) && ev.key !== '?' && !/^(Shift|Control|Alt|Meta)$/.test(ev.key)) {
         this.introKey();
         ev.preventDefault();
