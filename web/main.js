@@ -22,9 +22,10 @@ const GAME_START = 30.6e6;
 /** Machine time at which the opening holds the greeting on the tube, if no
  * key has come by then: all of it drawn, a few seconds before its end. */
 const GREET_HOLD = 26e6;
-/** The opening shot: how long it dwells, how long it takes to draw back
- * into the flight's own view (seconds). */
-const DWELL = 3.4;
+/** The opening: how long the greeting stays on the tube before 2026 comes
+ * up, and how long the camera takes to draw back into the flight's own
+ * view once the key has come (seconds). */
+const TUBE_SECONDS = 9;
 const PULL = 2.9;
 const calm = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const smooth = (x) => {
@@ -333,9 +334,9 @@ class Page {
 
   /** The opening's state: what has to be ready, and when. */
   introBegin(phase, full) {
-    this.intro = { phase, full, at: performance.now(), shown: false };
+    this.intro = { phase, full, clock: 0, shown: false };
     const el = $('intro');
-    el.classList.remove('hidden');
+    el.classList.remove('hidden', 'wait');
     el.classList.toggle('tube', phase === 'tube');
     $('intro-go').classList.remove('on');
     $('intro-sub').style.opacity = '0';
@@ -346,30 +347,41 @@ class Page {
     if (phase === 'tube') {
       tube.classList.remove('hidden', 'off');
       $('hint').classList.add('hidden');
-      $('intro-go').querySelector('.key').textContent = this.replay ? 'A replay. Press any key to watch it' : 'Press any key';
-      $('intro-go').querySelector('.touch').textContent = this.replay ? 'A replay. Tap to watch it' : 'Tap to begin';
+      $('intro-go').querySelector('.key').textContent = this.replay ? 'Press any key to watch the replay' : 'Press any key to fly';
+      $('intro-go').querySelector('.touch').textContent = this.replay ? 'Tap to watch the replay' : 'Tap to fly';
     }
   }
 
-  /** A key or a tap on the opening: on from the tube, or skip the show. */
+  /**
+   * A key or a tap in the opening. On the tube: on to 2026 at once. Over
+   * the title: the flight. While the camera draws back: straight in.
+   */
   introKey() {
     const i = this.intro;
     if (!i) return false;
     this.wake();
-    if (i.phase === 'tube') {
-      i.phase = 'show';
-      i.at = performance.now();
-      i.clock = 0;
-      $('intro').classList.remove('tube');
+    if (i.phase === 'tube') this.introOn();
+    else if (i.full && i.goAt === undefined) {
+      i.goAt = i.clock;
+      $('intro').classList.remove('wait');
       $('intro-go').classList.remove('on');
-      this.sound.powerOff();
-      if (calm() || this.view === 'tube') this.tubeAway();
-      else {
-        tube.classList.add('off');
-        setTimeout(() => this.tubeAway(), 430);
-      }
+      this.sound.swell(PULL + 1.5);
     } else if (i.full) i.skip = true;
     return true;
+  }
+
+  /** From the tube to 2026: the tube switches off, the title is struck. */
+  introOn() {
+    const i = this.intro;
+    i.phase = 'show';
+    i.clock = 0;
+    $('intro').classList.remove('tube');
+    this.sound.powerOff();
+    if (calm() || this.view === 'tube') this.tubeAway();
+    else {
+      tube.classList.add('off');
+      setTimeout(() => this.tubeAway(), 430);
+    }
   }
 
   /** The tube goes, unless it is the view. */
@@ -387,10 +399,11 @@ class Page {
   }
 
   /**
-   * The opening, each frame. On the tube, the program's greeting and a
-   * prompt. Then, the first time: the title struck in green dots on the
-   * dark, the scene coming up behind it as the dots turn white, the car
-   * against the Earth, and the long draw back into the flight's own view.
+   * The opening, each frame. First the program's greeting on the tube, a
+   * few seconds of it. Then, the first time: the title struck in green
+   * dots on the dark, the scene coming up behind it as the dots turn
+   * white, and the car drifting against the Earth for as long as nobody
+   * presses anything; then the long draw back into the flight's own view.
    * Later games: the title briefly, and the flight.
    */
   introStep(now) {
@@ -399,10 +412,10 @@ class Page {
     // than jumping it on: a lost moment of it is a moment nobody saw.
     const dt = Math.min(Math.max(0, (now - (i.last ?? now)) / 1000), this.introCap ?? 0.1);
     i.last = now;
-    i.clock = (i.clock ?? 0) + dt;
+    i.clock += dt;
     const tau = i.clock;
     if (i.phase === 'tube') {
-      if (tau > 1.4) $('intro-go').classList.add('on');
+      if (tau >= TUBE_SECONDS) this.introOn();
       return;
     }
     const scene = this.view !== 'tube';
@@ -414,29 +427,37 @@ class Page {
       return;
     }
     const full = i.full && !i.skip;
-    const box = this.title.layout(window.innerHeight > window.innerWidth ? 0.74 : 0.76);
-    const sub = $('intro-sub');
+    const box = this.title.layout(0.72);
+    const sub = $('intro-sub'), go = $('intro-go');
     sub.style.top = `${box.top + box.height + box.pitch * 2.2}px`;
     sub.textContent = this.demo ? this.demo.name : 'Roadster edition';
     const sweep = calm() ? 0 : full ? 1.25 : 0.45;
     const t0 = full ? 0.45 : 0;
     // The scene, once there is a scene to show, and not before the title.
-    if (i.readyAt !== undefined && i.sceneAt === undefined && tau >= (full ? 1.5 : 0.45)) {
-      i.sceneAt = tau;
-      if (full) this.sound.swell(DWELL + PULL);
-    }
-    let k = 0, fade = 0, hero = 0;
-    if (i.sceneAt !== undefined) {
+    if (i.readyAt !== undefined && i.sceneAt === undefined && tau >= (full ? 1.5 : 0.45)) i.sceneAt = tau;
+    i.shown = i.sceneAt !== undefined;
+    let k = 0, fade = 0, hero = 0, pullAt = Infinity;
+    if (i.shown) {
       hero = tau - i.sceneAt;
       fade = smooth(hero / (full ? 1.2 : 0.45));
-      if (full) k = calm() ? (hero >= DWELL + 0.6 ? 1 : 0) : Math.min(1, Math.max(0, (hero - DWELL) / PULL));
+      if (full && i.goAt !== undefined) {
+        // The draw back, once the key has come and the scene is up.
+        pullAt = Math.max(i.goAt, i.sceneAt + 0.8);
+        k = calm() ? (tau >= pullAt + 0.4 ? 1 : 0) : Math.min(1, Math.max(0, (tau - pullAt) / PULL));
+      }
     }
-    i.shown = i.sceneAt !== undefined;
     sceneCanvas.style.opacity = String(fade);
     rr.opening = full && i.shown ? { t: hero, k } : null;
-    // The title: struck, whitening with the scene, gone before the draw back.
-    const out = full ? DWELL - 0.6 : 0.5;
-    const alpha = i.shown ? 1 - smooth((hero - out) / 0.8) : 1;
+    // Waiting for the key, once the title is struck and the scene is up.
+    if (full && i.goAt === undefined && i.shown && hero > 1.4 && !go.classList.contains('on')) {
+      go.style.top = `${box.top + box.height + box.pitch * 2.2 + 46}px`;
+      go.classList.add('on');
+      $('intro').classList.add('wait');
+    }
+    // The title: struck, whitening with the scene, gone as the camera
+    // draws back (or, later games, after a moment).
+    const out = full ? pullAt : (i.sceneAt ?? Infinity) + 0.5;
+    const alpha = 1 - smooth((tau - out) / (full ? 0.6 : 0.8));
     this.title.draw(tau - t0, { sweep, white: fade, alpha });
     sub.style.opacity = String(Math.min(alpha, smooth((tau - t0 - sweep - 0.1) / 0.6)));
     if (k > 0.7 || (!full && i.shown && hero > 0.5)) $('hud').classList.remove('away');
@@ -454,7 +475,9 @@ class Page {
     sceneCanvas.style.opacity = '1';
     this.title.clear();
     $('intro').classList.add('hidden');
+    $('intro').classList.remove('wait');
     $('intro-sub').style.opacity = '0';
+    $('intro-go').classList.remove('on');
     $('hud').classList.remove('away');
     if (!this.briefed && !this.replay) {
       this.briefed = true;

@@ -140,17 +140,18 @@
   /* The opening: the 1973 tube with the program's greeting, then the
      title in the GT40's dots over the 2026 view. */
   #intro { position: absolute; inset: 0; z-index: 3; pointer-events: auto; }
-  #intro.tube { cursor: pointer; }
+  #intro.tube, #intro.wait { cursor: pointer; }
   #intro.hidden { display: none; }
   #title { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-  #intro .cap, #intro .go { margin: 0; transition: opacity 0.6s; }
+  #intro .cap, #intro .go { margin: 0; }
+  #intro .cap { transition: opacity 0.6s; }
   #intro .cap { position: absolute; left: max(20px, env(safe-area-inset-left)); top: max(18px, env(safe-area-inset-top)); max-width: calc(100% - 40px); font-size: 12px; line-height: 1.55; color: #6f7e6c; }
   #intro .cap b { display: block; font-weight: 500; color: #a9b8a4; }
-  #intro .go { position: absolute; left: 16px; right: 16px; bottom: max(30px, calc(env(safe-area-inset-bottom) + 22px)); text-align: center; font-size: 13px; letter-spacing: 0.08em; color: #b6c8ae; opacity: 0; }
+  #intro .go { position: absolute; left: 16px; right: 16px; top: 80%; text-align: center; font-size: 13px; letter-spacing: 0.08em; color: #c9c9c2; opacity: 0; transition: opacity 0.9s; }
   #intro .go.on { opacity: 1; }
   #intro .go .touch { display: none; }
   @media (hover: none) { #intro .go .key { display: none; } #intro .go .touch { display: inline; } }
-  #intro:not(.tube) .cap, #intro:not(.tube) .go { opacity: 0; }
+  #intro:not(.tube) .cap { opacity: 0; }
   #intro .sub { position: absolute; left: 16px; right: 16px; margin: 0; text-align: center; font-size: clamp(13px, 1.5vw, 18px); font-weight: 400; letter-spacing: 0.16em; color: #ecece6; opacity: 0; text-shadow: 0 0 18px rgba(0,0,0,0.9); }
   #tube.off { animation: tubeoff 0.42s ease-in forwards; transform-origin: 50% 50%; }
   @keyframes tubeoff {

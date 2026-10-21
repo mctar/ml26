@@ -265,7 +265,7 @@ void main() {
     };
     earth.add(air);
     earth.position.set(-42000, 52000, -118000);
-    earth.rotation.y = 1.2;
+    earth.rotation.y = 4.8; // Africa and Europe toward the Moon
     this.scene.add(earth);
     this.earth = earth;
   }
@@ -1289,9 +1289,9 @@ float blastAt(vec2 p){
   }
 
   /**
-   * The car in the opening: drifting end over end as it has since it left
-   * the Earth, then brought round on its corner jets to the attitude the
-   * program starts it at, turning about its middle.
+   * The car in the opening: drifting, turning a little this way and that
+   * for as long as the opening waits, then brought round on its corner jets
+   * to the attitude the program starts it at, turning about its middle.
    */
   openingPose(o, dt) {
     const g = this.car.group;
@@ -1299,7 +1299,8 @@ float blastAt(vec2 p){
     const com = COM.clone().multiplyScalar(g.scale.x);
     const c = com.clone().applyQuaternion(qFlight).add(g.position);
     const t = o.t;
-    const qHero = new T.Quaternion().setFromEuler(new T.Euler(0.8 + 0.04 * t, -0.5 + 0.05 * t, 0.15 + 0.02 * t, 'YXZ'));
+    const w = (p) => Math.sin((2 * Math.PI * t) / p);
+    const qHero = new T.Quaternion().setFromEuler(new T.Euler(0.8 + 0.12 * w(29), -0.5 + 0.24 * w(41), 0.15 + 0.08 * w(19), 'YXZ'));
     const e = ease(T.MathUtils.clamp((o.k - 0.04) / 0.55, 0, 1));
     const q = qHero.slerp(qFlight, e);
     g.quaternion.copy(q);
@@ -1318,7 +1319,8 @@ float blastAt(vec2 p){
     } else this.puffing = false;
   }
 
-  /** The opening shot: the car, near, against the Earth, on a long lens. */
+  /** The opening shot: the car, near, against the Earth, on a long lens,
+   * the camera easing in and out and round a little as it waits. */
   heroShot(t, c) {
     const aspect = this.camera.aspect || 16 / 9;
     // About fifteen degrees across, whatever the screen.
@@ -1330,9 +1332,11 @@ float blastAt(vec2 p){
     // The car beside the Earth on a wide screen, under it on a tall one;
     // drifting a little closer as the shot goes on.
     const wide = aspect >= 1;
-    const sep = T.MathUtils.degToRad((wide ? hfov * 0.42 : vfov * 0.3) * (1 - 0.02 * t));
+    const w = (p) => Math.sin((2 * Math.PI * t) / p);
+    const sep = T.MathUtils.degToRad((wide ? hfov * 0.42 : vfov * 0.3) * (1 - 0.06 * w(33)));
     const toCar = e.clone().multiplyScalar(Math.cos(sep)).addScaledVector(wide ? right : up, -Math.sin(sep)).normalize();
-    const D = 185 * (1 - 0.025 * t);
+    toCar.applyAxisAngle(e, 0.06 * w(47));
+    const D = 185 * (1 - 0.06 * w(27));
     const cam = c.clone().addScaledVector(toCar, -D);
     // Both a little above the middle, to leave room for the title below.
     const dir = toCar.clone().add(e).normalize().addScaledVector(up, -Math.tan(T.MathUtils.degToRad(vfov * 0.13))).normalize();
