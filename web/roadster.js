@@ -1371,10 +1371,8 @@ float blastAt(vec2 p){
 
   startTopple(state) {
     const v = new T.Vector3(state.horvel / 10, Math.min(0, state.vervel / 10), 0);
-    const fall = state.angle >= 0 ? 1 : -1;
     const seed = (Math.abs(state.indexl * 0.618034) + (state.t / 1e6) * 0.37) % 1;
-    const home = TERRAIN_X0 + state.indexl * TERRAIN_DX + TERRAIN_DX / 2;
-    this.topple = new Topple(this.car, v, fall, (x, z) => this.solidAt(x, z), seed, home);
+    this.topple = new Topple(this.car, v, (x, z) => this.solidAt(x, z), seed);
     this.toppleIndex = state.indexl;
     this.toppleKept = false;
   }

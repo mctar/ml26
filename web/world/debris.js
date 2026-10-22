@@ -196,9 +196,11 @@ class Piece {
     this.body = body;
   }
 
-  pose() {
-    this.o.position.copy(this.body.x);
-    this.o.quaternion.copy(this.body.q);
+  /** Drawn `k` of the way through the body's last step. */
+  pose(k = 1) {
+    const { x, q } = this.body.lerped(k, this.o.position, this.o.quaternion);
+    this.o.position.copy(x);
+    this.o.quaternion.copy(q);
   }
 }
 
@@ -254,12 +256,14 @@ export class Crash {
         for (const p of this.pieces) p.body.step(this.solid);
       }
     }
+    const k = this.acc / STEP;
     if (!this.burst) {
-      poseCar(this.car, this.body);
+      poseCar(this.car, this.body, 1, k);
       this.car.freeWheels(this.body.wheels, dt);
     } else {
-      for (const p of this.pieces) p.pose();
-      const t = this.time - this.burst.time;
+      for (const p of this.pieces) p.pose(k);
+      // The particles by the same clock, not stepwise.
+      const t = this.time + this.acc - this.burst.time;
       if (this.jobs.length) this.pump(t, 5);
       for (const e of this.effects) e.update(t);
     }
@@ -297,6 +301,18 @@ export class Crash {
       out.add(new T.Vector3(R() - 0.5, R() - 0.5, R() - 0.5).multiplyScalar(1.2)).normalize();
       v.addScaledVector(out, kick * (0.6 + 0.8 * R()));
       v.y += up * (0.5 + R());
+      // Not so high, nor so far, that it is still in the air, or out of
+      // the picture, when the program starts the next game: a few seconds
+      // up and down at a sixth of a g. Softly, so they do not all go
+      // alike.
+      const soft = (x, m) => m * Math.tanh(x / m);
+      const along = Math.hypot(v.x, v.z), farMax = hard ? 30 : 18;
+      if (along > 0) {
+        const k = soft(along, farMax) / along;
+        v.x *= k;
+        v.z *= k;
+      }
+      if (v.y > 0) v.y = soft(v.y, hard ? 15 : 11);
       return v;
     };
     const spin = (k) => new T.Vector3(R() - 0.5, R() - 0.5, R() - 0.5).multiplyScalar(2 * k);
@@ -317,13 +333,21 @@ export class Crash {
       this.pieces.push(piece);
       return piece;
     };
-    const boxBody = (geo, mu = 0.8, e = 0.25) => {
+    const boxBody = (geo, mu = 0.8, e = 0.25, maxSpin = 9) => {
       geo.computeBoundingBox();
       const s = geo.boundingBox.getSize(new T.Vector3());
       const h = s.clone().multiplyScalar(0.5);
       const pts = [];
-      for (let i = 0; i < 8; i++) pts.push({ p: new T.Vector3(i & 1 ? h.x : -h.x, i & 2 ? h.y : -h.y, i & 4 ? h.z : -h.z) });
-      return new Rigid({ inertia: boxInertia(Math.max(s.x, 0.1), Math.max(s.y, 0.1), Math.max(s.z, 0.1)), points: pts, mu, e, damp: 1.8 });
+      // The corners; and for a big piece the middles of its edges and
+      // faces too, so it does not sink into a boulder between corners.
+      const big = Math.max(s.x, s.y, s.z) > 1.5;
+      for (let i = 0; i < 27; i++) {
+        const u = [(i % 3) - 1, (Math.floor(i / 3) % 3) - 1, Math.floor(i / 9) - 1];
+        const zeros = u.filter((c) => c === 0).length;
+        if (zeros === 3 || (zeros > 0 && !big)) continue;
+        pts.push({ p: new T.Vector3(u[0] * h.x, u[1] * h.y, u[2] * h.z) });
+      }
+      return new Rigid({ inertia: boxInertia(Math.max(s.x, 0.1), Math.max(s.y, 0.1), Math.max(s.z, 0.1)), points: pts, mu, e, damp: 1.8, maxSpin });
     };
 
     const paint = this.kit.paint, dark = this.kit.dark;
@@ -340,7 +364,7 @@ export class Crash {
       m.receiveShadow = true;
       const p = new T.Vector3().applyMatrix4(M);
       const v = leave(new T.Vector3((x0 + x1) / 2, 1.4, 0).applyMatrix4(M), hard ? 6 : 3.5, 2);
-      const body = boxBody(g, 0.85, 0.2);
+      const body = boxBody(g, 0.85, 0.2, 5);
       add(m, body, p, v, spin(hard ? 2.5 : 1.2).add(b.w));
     }
     // The wheels, whole, turning: they roll off where they land.
@@ -355,7 +379,12 @@ export class Crash {
       const holder = new T.Group();
       holder.add(wg);
       this.group.add(holder);
-      const body = new Rigid({ inertia: [(3 * w.r * w.r + 0.85) / 12, (3 * w.r * w.r + 0.85) / 12, (w.r * w.r) / 2], wheels: [{ c: new T.Vector3(), axis: new T.Vector3(0, 0, 1), r: w.r, hw: CAR.TYRE_W / 2, rollMu: 0.12, mu: 0.8 }], damp: 0.4 });
+      // Rolling on its tread; lying down or tipping, on the rims' edges.
+      const rim = [];
+      for (let a = 0; a < 12; a++) {
+        for (const s of [-1, 1]) rim.push({ p: new T.Vector3(Math.cos((a / 12) * 2 * Math.PI) * w.r, Math.sin((a / 12) * 2 * Math.PI) * w.r, (s * CAR.TYRE_W) / 2), mu: 0.8, e: 0.2 });
+      }
+      const body = new Rigid({ inertia: [(3 * w.r * w.r + 0.85) / 12, (3 * w.r * w.r + 0.85) / 12, (w.r * w.r) / 2], points: rim, wheels: [{ c: new T.Vector3(), axis: new T.Vector3(0, 0, 1), r: w.r, hw: CAR.TYRE_W / 2, rollMu: 0.3, mu: 0.8 }], damp: 0.4 });
       const v = leave(p, hard ? 7 : 3, 1.2);
       const axle = new T.Vector3(0, 0, 1).applyQuaternion(Q);
       const wv = spin(hard ? 3 : 1.5).addScaledVector(axle, -(v.x / w.r) * 0.8);
@@ -373,7 +402,7 @@ export class Crash {
       const m = new T.Mesh(g, car.mats.dark);
       m.castShadow = true;
       const p = new T.Vector3().applyMatrix4(M);
-      add(m, boxBody(g, 0.7, 0.3), p, leave(new T.Vector3(-0.7, 3.2, 0).applyMatrix4(M), 4, 1.5), spin(3));
+      add(m, boxBody(g, 0.7, 0.3, 8), p, leave(new T.Vector3(-0.7, 3.2, 0).applyMatrix4(M), 4, 1.5), spin(3));
     }
     const glass = this.kit.glass;
     for (let i = 0; i < (hard ? 22 : 14); i++) {
@@ -391,7 +420,7 @@ export class Crash {
       const m = new T.Mesh(g, f.material);
       m.castShadow = true;
       const p = new T.Vector3().applyMatrix4(M);
-      add(m, boxBody(g, 0.9, 0.2), p, leave(f.position.clone().applyMatrix4(M), 7, 3), spin(3));
+      add(m, boxBody(g, 0.9, 0.2, 8), p, leave(f.position.clone().applyMatrix4(M), 7, 3), spin(3));
     }
     for (let i = 0; i < (hard ? 46 : 22); i++) {
       const dark = R() < 0.35;

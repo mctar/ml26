@@ -7,11 +7,15 @@
 //
 // Impulses, not springs: each step the contact points that are in the
 // ground get the impulse that stops them going further in (with a little
-// bounce for a hard blow and a push back out for what has sunk), and
-// friction up to its share of that, solved over the contacts a few times
-// round. A fixed step, so that the same start always ends the same way:
-// the tip-over chooses its start by trying a few, and what it shows must
-// be what it tried.
+// bounce for a hard blow), and friction up to its share of that, solved
+// over the contacts a few times round. What has sunk in is pushed back out
+// by moving it, not by speeding it up: a push out as speed would carry on
+// after it was out, and at a sixth of a g a body would hop about where it
+// should lie. Near rest a body is slowed hard and then put to sleep. A
+// fixed step, so that the same start always ends the same way: the
+// tip-over chooses its start by trying a few, and what it shows must be
+// what it tried. Between steps the picture is drawn between the last two
+// (`lerped`), so it moves evenly whatever the display's rate.
 
 import * as T from '../vendor/three.js';
 
@@ -20,6 +24,7 @@ export const STEP = 1 / 120;
 
 const _P = new T.Vector3(), _r = new T.Vector3(), _n = new T.Vector3(), _u = new T.Vector3(), _a = new T.Vector3();
 const _J = new T.Vector3(), _vp = new T.Vector3(), _t1 = new T.Vector3(), _t2 = new T.Vector3(), _q = new T.Quaternion();
+const _pv = new T.Vector3(), _pw = new T.Vector3();
 const _R = new T.Matrix3(), _m4 = new T.Matrix4();
 
 /** The ground's normal at (x, z) from the height function. */
@@ -36,17 +41,21 @@ export class Rigid {
    *          wheels: { c, axis, r, hw } body-frame centre, axle, radius,
    *          half-width; rollMu: rolling friction for the wheels
    */
-  constructor({ inertia, points = [], wheels = [], mu = 0.65, e = 0.2, rollMu = 0.04, wheelMu = 0.9, damp = 0 }) {
-    this.damp = damp; // on the ground: what ploughing through the dust takes, per second
+  constructor({ inertia, points = [], wheels = [], mu = 0.65, e = 0.2, rollMu = 0.04, wheelMu = 0.9, damp = 0, maxSpin = Infinity }) {
+    this.damp = damp; // on the ground, not on its wheels: what ploughing through the dust takes, per second
+    this.maxSpin = maxSpin; // rad/s: faster than this a small piece only flickers
     this.invI = new T.Vector3(1 / inertia[0], 1 / inertia[1], 1 / inertia[2]);
     this.points = points.map((p) => ({ p: p.p ?? p, mu: p.mu ?? mu, e: p.e ?? e }));
     this.wheels = wheels.map((w) => ({ ...w, mu: w.mu ?? wheelMu, rollMu: w.rollMu ?? rollMu, contact: false, spin: 0 }));
     this.x = new T.Vector3();
     this.q = new T.Quaternion();
+    this.px = new T.Vector3(); // where it was before the last step, for drawing between
+    this.pq = new T.Quaternion();
     this.v = new T.Vector3();
     this.w = new T.Vector3();
     this.asleep = false;
     this.still = 0;
+    this.slow = 0;
     this.time = 0;
     this.contacts = [];
     this.hits = []; // blows since last read: { at, speed }
@@ -56,10 +65,13 @@ export class Rigid {
   set(x, q, v, w) {
     this.x.copy(x);
     this.q.copy(q).normalize();
+    this.px.copy(this.x);
+    this.pq.copy(this.q);
     this.v.copy(v);
     this.w.copy(w);
     this.asleep = false;
     this.still = 0;
+    this.slow = 0;
     return this;
   }
 
@@ -69,6 +81,8 @@ export class Rigid {
     Object.assign(b, this);
     b.x = this.x.clone();
     b.q = this.q.clone();
+    b.px = this.px.clone();
+    b.pq = this.pq.clone();
     b.v = this.v.clone();
     b.w = this.w.clone();
     b.wheels = this.wheels.map((w) => ({ ...w }));
@@ -117,7 +131,7 @@ export class Rigid {
       depth = 0.05;
     } else depth *= n.y;
     const r = P.clone().sub(this.x);
-    const c = { r, n, depth, mu, e, jn: 0, j1: 0, j2: 0, roll: tangent ? rollMu : mu };
+    const c = { r, n, depth, mu, e, jn: 0, j1: 0, j2: 0, jp: 0, roll: tangent ? rollMu : mu };
     // Tangent directions: along the wheel's roll, and across it.
     if (tangent) c.t1 = tangent.clone().addScaledVector(n, -tangent.dot(n)).normalize();
     else {
@@ -132,7 +146,8 @@ export class Rigid {
     _vp.crossVectors(this.w, r).add(this.v);
     const vn = _vp.dot(n);
     c.target = vn < -1.5 ? -vn * e : 0;
-    c.target = Math.max(c.target, Math.min(2, (Math.max(0, depth - 0.02) * 0.25) / STEP));
+    // Out of the ground by moving, at a quarter of the depth a step.
+    c.bias = (Math.max(0, depth - 0.02) * 0.25) / STEP;
     c.vin = -vn;
     this.contacts.push(c);
     return c;
@@ -141,6 +156,8 @@ export class Rigid {
   step(solid) {
     const dt = STEP;
     this.time += dt;
+    this.px.copy(this.x);
+    this.pq.copy(this.q);
     if (this.asleep) return;
     this.v.y -= G * dt;
     this.R.setFromMatrix4(_m4.makeRotationFromQuaternion(this.q));
@@ -204,27 +221,81 @@ export class Rigid {
       }
     }
     if (blow > 2.5) this.hits.push({ at: blowAt.clone().add(this.x), speed: blow });
-    if (this.damp && this.contacts.length) {
+    if (this.damp && this.contacts.some((c) => !c.wheel)) {
       const k = Math.max(0, 1 - this.damp * dt);
       this.w.multiplyScalar(k);
       this.v.x *= k;
       this.v.z *= k;
     }
-    // Integrate.
-    this.x.addScaledVector(this.v, dt);
-    const wl = this.w.length();
+    // Nearly still on the ground: let it stop, not creep. Only where it
+    // stands on something (three points or more round under its centre),
+    // or after it has crept a while: not on an edge, where it is only slow
+    // because it is at the top, about to fall.
+    const v2 = this.v.lengthSq(), w2 = this.w.lengthSq();
+    if (this.contacts.length && v2 < 0.36 && w2 < 0.36) this.slow += dt;
+    else this.slow = 0;
+    if (this.slow > 0 && (this.slow > 1.2 || this.standing())) {
+      const k = Math.max(0, 1 - 4 * dt);
+      this.v.multiplyScalar(k);
+      this.w.multiplyScalar(k);
+    }
+    if (w2 > this.maxSpin * this.maxSpin) this.w.setLength(this.maxSpin);
+    // Out of the ground: a push that moves it but leaves it no faster.
+    _pv.set(0, 0, 0);
+    _pw.set(0, 0, 0);
+    if (this.contacts.some((c) => c.bias > 0)) {
+      const v = this.v, w = this.w;
+      this.v = _pv;
+      this.w = _pw;
+      for (let it = 0; it < 4; it++) {
+        for (const c of this.contacts) {
+          if (c.bias <= 0 && c.jp <= 0) continue;
+          _vp.crossVectors(this.w, c.r).add(this.v);
+          const jp = Math.max(0, c.jp + (c.bias - _vp.dot(c.n)) * c.kn);
+          const dj = jp - c.jp;
+          c.jp = jp;
+          if (dj !== 0) this.impulse(c.r, _J.copy(c.n).multiplyScalar(dj));
+        }
+      }
+      this.v = v;
+      this.w = w;
+    }
+    // Integrate: the push out with the rest, then forgotten.
+    this.x.addScaledVector(this.v, dt).addScaledVector(_pv, dt);
+    _u.copy(this.w).add(_pw);
+    const wl = _u.length();
     if (wl > 1e-6) {
-      _q.setFromAxisAngle(_u.copy(this.w).divideScalar(wl), wl * dt);
+      _q.setFromAxisAngle(_u.divideScalar(wl), wl * dt);
       this.q.premultiply(_q).normalize();
     }
     // At rest: still, on the ground, for a while.
-    if (this.contacts.length && this.v.lengthSq() < 0.01 && this.w.lengthSq() < 0.0025) this.still += dt;
+    if (this.contacts.length && this.v.lengthSq() < 0.04 && this.w.lengthSq() < 0.01) this.still += dt;
     else this.still = 0;
-    if (this.still > 0.6) {
+    if (this.still > 0.4) {
       this.asleep = true;
       this.v.set(0, 0, 0);
       this.w.set(0, 0, 0);
     }
+  }
+
+  /** Whether the centre is over the ground it touches: the contacts, seen
+   * from above, round it on every side. */
+  standing() {
+    const cs = this.contacts;
+    if (cs.length < 3) return false;
+    // Every way round, some contact: no half-plane through the centre
+    // without one (a gap of more than half a turn between them).
+    const a = cs.map((c) => Math.atan2(c.r.z, c.r.x)).sort((p, q) => p - q);
+    let gap = a[0] + 2 * Math.PI - a[a.length - 1];
+    for (let i = 1; i < a.length; i++) gap = Math.max(gap, a[i] - a[i - 1]);
+    return gap < Math.PI * 0.9;
+  }
+
+  /** Where to draw it, `k` of the way from the step before to the last. */
+  lerped(k, x = new T.Vector3(), q = new T.Quaternion()) {
+    x.copy(this.px).lerp(this.x, k);
+    q.copy(this.pq).slerp(this.q, k);
+    return { x, q };
   }
 
   /** The body's up, in the world. */

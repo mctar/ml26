@@ -251,13 +251,26 @@ if (sceneName === 'replay') {
       note('hull-ground', low, i);
     }
   }
-  /** Run to frame `to` (absolute), checking each. */
-  lab.run = (to) => {
+  /**
+   * Run to frame `to` (absolute), checking each. The recording is at 30
+   * frames a second; `hz` draws each of its frames as that many display
+   * frames would (each `jitter` seconds uneven, as a browser's are), and
+   * `each` is called after every one of them, for measuring.
+   */
+  let wall = 0, seed = 1;
+  lab.run = (to, { hz = 30, jitter = 0, each = null } = {}) => {
     to = Math.min(to, rec.frames.length - 1);
+    const sub = Math.max(1, Math.round(hz / 30));
     for (; i <= to; i++) {
       while (nextTable < rec.tables.length && rec.tables[nextTable][0] <= i) table = rec.tables[nextTable++];
       const st = stateAt(i);
-      world.update(st, st.t / 1000, 1 / 30);
+      for (let k = 0; k < sub; k++) {
+        seed = (seed * 16807) % 2147483647;
+        const dt = 1 / 30 / sub + (jitter ? (seed / 2147483647 - 0.5) * 2 * jitter : 0);
+        wall += dt * 1000;
+        world.update(st, hz === 30 ? st.t / 1000 : wall, dt);
+        if (each) each(i, k, dt);
+      }
       check();
     }
     return i;

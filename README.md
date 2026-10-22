@@ -51,16 +51,22 @@ Live at [moonlander.btrbot.com](https://moonlander.btrbot.com).
   jets, raymarched; `ballistic.js` dust and ejecta on vacuum trajectories,
   and the sheet of dust the jets drive along the ground; `rigid.js` rigid
   bodies against the ground (the terrain, the boulders, the diner's roof,
-  cars left from earlier games), with friction and wheels that roll;
-  `topple.js` the car going over when the program says it has tipped,
-  falling the way a car falls and lying where it came to rest for the
-  games after; `debris.js` a crash, from the car meeting what it hit to
-  the pieces at rest; `prints.js` boot prints.
+  cars left from earlier games), with friction and wheels that roll,
+  stepped at a fixed rate and drawn between steps, so they move evenly at
+  any frame rate, and pushed out of the ground by moving them rather than
+  by speeding them up, so nothing hops off it; `topple.js` the car going
+  over when the program says it has tipped: rolled up over an edge with
+  the edge kept on the ground, past the balance, then falling the way a
+  car falls and lying where it came to rest for the games after;
+  `debris.js` a crash, from the car meeting what it hit to the pieces at
+  rest; `prints.js` boot prints.
 - `web/lab.html`: a page for checking the 2026 view, not linked from the
   site. It replays flights recorded by `tools/lab/record.mjs` through the
   real view frame by frame, and measures every frame: the driver's soles
   against the ground, every part of him against the car's body and
-  fittings, the tyres and hull against the ground.
+  fittings, the tyres and hull against the ground. It can also step the
+  view as a 60 or 120 Hz display would, unevenly as browsers do, to
+  measure how smoothly things move.
 - `web/radio.js` plays the spoken messages in `web/radio/`, made by
   `tools/radio/make.sh` from `tools/radio/lines.json` with pocket-tts and
   ffmpeg.

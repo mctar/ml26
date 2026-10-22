@@ -1,15 +1,16 @@
 // The car going over. The program says when it has tipped (SIDEM, ANGLEM,
 // BUMPYM) and keeps an angle for the 1973 picture; here the car is a rigid
-// body that comes down the way the program brought it in, and falls the
-// way a car falls: over its wheels onto its side or its roof, end over end
-// if it came in fast and nose down. Where the ground alone would leave it
-// on its wheels, it is given the smallest push that will not: a wheel
-// catching, a spring giving. The push is found by running the few
-// candidates through to rest while the car takes the blow, before it is
-// given, so what is shown is one of them, step for step.
+// body that comes down the way the program brought it in, takes the
+// landing, and goes over onto its side, or on over onto its roof. If it
+// is going over already, it is let go. Otherwise it is rolled over an
+// edge, a wheel catching, a spring giving: not with a blow (at a sixth of
+// a g, any blow that rolls a car also throws it into the air) but
+// steadily, the edge kept on the ground, up onto two wheels and over the
+// balance; from there it falls by itself. Over the way it leans, or down
+// the slope, or either way on the flat.
 
 import * as T from '../vendor/three.js';
-import { Rigid, STEP, boxInertia } from './rigid.js';
+import { Rigid, STEP, G, boxInertia } from './rigid.js';
 import { CAR } from './car.js';
 
 /** Where the car's mass is, in its own frame. */
@@ -35,167 +36,171 @@ export function carBody(car) {
   return new Rigid({ inertia: boxInertia(14.2, 3.4, 6.4, 0.8), points, wheels, mu: 0.9, e: 0.15, rollMu: 0.8, wheelMu: 1.0 });
 }
 
-/** The car's group pose from the body. */
-export function poseCar(car, body, scale = 1) {
-  car.group.quaternion.copy(body.q);
-  car.group.position.copy(COM).multiplyScalar(-scale).applyQuaternion(body.q).add(body.x);
+/** The car's group pose from the body, `k` of the way through its last
+ * step (1: where the step left it); or from a pose kept, { x, q }. */
+export function poseCar(car, body, scale = 1, k = 1) {
+  const { x, q } = body.lerped ? body.lerped(k, _x, _q) : body;
+  car.group.quaternion.copy(q);
+  car.group.position.copy(COM).multiplyScalar(-scale).applyQuaternion(q).add(x);
   car.group.scale.setScalar(scale);
 }
+const _x = new T.Vector3(), _q = new T.Quaternion();
+const _ax = new T.Vector3(), _pv = new T.Vector3(), _pv2 = new T.Vector3(), _arm = new T.Vector3(), _off = new T.Vector3(), _acr = new T.Vector3();
+const _al = new T.Vector3(), _J = new T.Vector3(), _rest = new T.Vector3(), _Y = new T.Vector3(0, 1, 0), _rq = new T.Quaternion();
 
 export class Topple {
   /**
    * @param car    the Car, posed where it touched down
    * @param v      its velocity then, ft/s (world)
-   * @param fall   +1 or -1: the way the program has it falling along x
    * @param solid  the height of whatever is solid at (x, z)
    * @param seed   a number in 0..1 for the small things
-   * @param home   x where the program keeps the wreck: it should end near
    */
-  constructor(car, v, fall, solid, seed = 0.5, home = null) {
+  constructor(car, v, solid, seed = 0.5) {
     this.car = car;
     this.solid = solid;
-    this.home = home;
+    this.seed = seed;
     car.group.updateMatrixWorld(true);
     const body = carBody(car);
+    body.damp = 1.5; // down on its body, the dust takes a good deal of it
     const q0 = car.group.quaternion.clone();
     body.set(COM.clone().applyQuaternion(q0).add(car.group.position), q0, v, new T.Vector3());
     this.body = body;
-    this.steps = 0;
     this.acc = 0;
-    this.tries = 0;
-    // First the landing itself, as it comes: until the blow is over and it
-    // has settled into it a little.
-    const pre = body.clone();
-    let touched = -1;
-    let n = 0;
-    while (n < 1.5 / STEP) {
-      pre.step(solid);
-      n++;
-      if (touched < 0 && pre.contacts.length) touched = n;
-      if (touched >= 0 && n - touched >= 0.35 / STEP) break;
-    }
-    pre.hits = [];
-    this.branchAt = n;
-    // Trying the ways it can go over takes a while: a few at each frame
-    // until the car gets there, the rest then.
-    this.search = this.choose(pre, v, fall, seed);
+    this.time = 0;
+    this.touched = -1; // when it first met the ground
+    this.begun = false; // the landing over, the way over chosen
+    this.driving = null;
+    this.side = 0;
+    this.again = false; // tried the other way
   }
 
-  *choose(pre, v, fall, seed) {
-    // The ways it can go over, each turning about the edge it goes over:
-    // one side's tyres, or the front or back pair.
-    const q = pre.q, x = pre.x;
-    const at = (lx, ly, lz) => new T.Vector3(lx, ly, lz).sub(COM).applyQuaternion(q).add(x);
-    const side = seed < 0.5 ? 1 : -1;
+  /** Over its tyres on that side (+1, -1: the car's own z). */
+  way(side) {
     const edge = CAR.TRACK + CAR.TYRE_W / 2;
-    const front = 4.25 + 0.75, back = -4.35 - 0.75;
-    const way = (axis, about) => ({ axis: new T.Vector3(...axis).applyQuaternion(q), arm: x.clone().sub(about) });
-    const roll = [way([side, 0, 0], at(0, 0.1, side * edge)), way([-side, 0, 0], at(0, 0.1, -side * edge))];
-    const pitch = [way([0, 0, -fall], at(fall > 0 ? front : back, 0.1, 0)), way([0, 0, fall], at(fall > 0 ? back : front, 0.1, 0))];
-    // Coming in fast, end over end the way it was going; else on its side.
-    const fast = Math.abs(v.x) > 8;
-    const ways = fast ? [pitch[0], ...roll, pitch[1]] : [...roll, pitch[0], pitch[1]];
-    // A little twist in every push, so nothing goes over too squarely.
-    const twist = new T.Vector3(((seed * 7.3) % 1) * 0.12 - 0.06, (seed - 0.5) * 0.2, 0).applyQuaternion(q);
-    // The blow has taken the speed along the ground: the tyres dug in.
-    const dig = new T.Vector3(-pre.v.x, 0, -pre.v.z);
-    const push = (w, m) => {
-      const dw = w.axis.clone().multiplyScalar(m).add(twist);
-      return { dw, dv: new T.Vector3().crossVectors(dw, w.arm).add(dig) };
-    };
-    let chosen = null;
-    // Over by itself?
-    const none = { dw: new T.Vector3(), dv: dig.clone() };
-    const end0 = yield* this.trial(pre, none);
-    if (end0.tipped) chosen = { ...none, end: end0 };
-    // Else the first way that goes over, with about the least push that
-    // does it and a little more, so it does not hang on the edge; and
-    // that leaves it about where the program has it.
-    const MAX = 2.6;
-    let spare = null;
-    for (const w of ways) {
-      if (chosen) break;
-      let hi = push(w, MAX);
-      let endHi = yield* this.trial(pre, hi);
-      if (!endHi.over) continue;
-      let lo = 0.3, mHi = MAX;
-      for (let k = 0; k < 3; k++) {
-        const m = (lo + mHi) / 2;
-        const p = push(w, m);
-        const e = yield* this.trial(pre, p);
-        if (e.over) {
-          mHi = m;
-          hi = p;
-          endHi = e;
-        } else lo = m;
-      }
-      const firm = push(w, Math.min(MAX, mHi * 1.15));
-      const e = yield* this.trial(pre, firm);
-      const pick = e.over ? { ...firm, end: e } : { ...hi, end: endHi };
-      if (pick.end.tipped) chosen = pick;
-      else if (!spare || pick.end.dist < spare.end.dist) spare = pick;
-    }
-    chosen = chosen || spare || { ...push(ways[0], MAX), end: { tipped: false, over: false, up: 1, dist: 0 } };
-    this.push = chosen;
-    this.result = chosen.end;
+    return { axis: new T.Vector3(side, 0, 0).applyQuaternion(this.body.q).normalize(), pivot: new T.Vector3(0, 0.1, side * edge).sub(COM) };
   }
 
-  /** Go on with the search for `ms` milliseconds, or to the end. */
-  think(ms = Infinity) {
-    const t0 = performance.now();
-    while (this.search) {
-      if (this.search.next().done) this.search = null;
-      else if (performance.now() - t0 > ms) break;
+  /** The landing is over: which way it goes, and if it needs taking. */
+  begin() {
+    const b = this.body;
+    this.begun = true;
+    if (b.up().y < 0.4) return; // over already, by itself
+    const across = new T.Vector3(0, 0, 1).applyQuaternion(b.q);
+    const lean = b.up().dot(across);
+    if (Math.abs(lean) > 0.08) this.side = Math.sign(lean);
+    else {
+      const p = b.x, h = this.solid;
+      const dh = h(p.x + across.x * 3, p.z + across.z * 3) - h(p.x - across.x * 3, p.z - across.z * 3);
+      this.side = Math.abs(dh) > 0.15 ? -Math.sign(dh) : this.seed < 0.5 ? 1 : -1;
     }
+    this.driving = this.start(this.way(this.side), b);
   }
 
-  /** From the landing, push and run through to rest (or five and a half
-   * seconds), and see how it lies. */
-  *trial(pre, p) {
-    this.tries++;
-    const b = pre.clone();
-    b.w.add(p.dw);
-    b.v.add(p.dv);
-    const x0 = b.x.clone();
-    for (let i = 0; i < 5.5 / STEP && !b.asleep; i++) {
-      b.step(this.solid);
-      if (i % 40 === 39) {
-        yield;
-        // Gone well away while still moving: not one to keep.
-        if (Math.abs(b.x.x - x0.x) > 16 || Math.abs(b.x.z) > 12) break;
-      }
-      // Settled upside down or on its side: that is how it ends.
-      if (i % 12 === 0 && b.v.lengthSq() < 0.25 && b.w.lengthSq() < 0.04 && b.up().y < 0.1 && b.contacts.length > 2) break;
+  /** A way, ready to drive a body from where it is now. */
+  start(w, b) {
+    return { ...w, q0inv: b.q.clone().invert(), steps: 0, slide: null, h0: null, rest: null, spin: null, piv: w.pivot.clone(), on: 'start' };
+  }
+
+  /**
+   * One step of rolling the body over the way's edge. The body is led:
+   * turning about the edge, which stays on the ground and slides on as it
+   * was going, slowing as the ground drags at it; or, once its body is
+   * down on the ground further out than the tyres (a bump, a bulging
+   * side), about that. It turns as fast as an edge on the ground could be
+   * held to (faster, and it would come off), and slower toward the top,
+   * as a thing thrown up slows, so it comes over slowly and falls from
+   * there faster and faster, as things do. Returns false once the centre
+   * is past all it rests on: from there it falls by itself.
+   */
+  roll(b, w) {
+    if (++w.steps > 4 / STEP) return false;
+    const axis = _ax.copy(w.axis).applyQuaternion(_rq.copy(b.q).multiply(w.q0inv)).normalize();
+    const across = _acr.crossVectors(axis, _Y).normalize();
+    // What it turns about: the edge, once that is down (leaning the other
+    // way on rough ground, it is not, at first); and whatever it rests on
+    // that is further out, a good deal further, so as not to flit between
+    // points of the same side.
+    if (w.on === 'start') {
+      const edge = _pv.copy(w.pivot).applyQuaternion(b.q).add(b.x);
+      if (edge.y - this.solid(edge.x, edge.z) < 0.3 || !b.contacts.length) w.on = 'edge';
     }
-    const up = b.up();
-    const over = up.y < 0.4;
-    // Over, and still about where it came down, in the program's column
-    // of ground and not far off the line, so that the next car to come
-    // down there finds it there.
-    const inHome = this.home === null || Math.abs(b.x.x - this.home) < 18;
-    const tipped = over && inHome && Math.abs(b.x.x - x0.x) < 7 && Math.abs(b.x.z) < 6;
-    return { over, tipped, up: up.y, dist: Math.hypot(b.x.x - x0.x, b.x.z), x: b.x.clone(), q: b.q.clone() };
+    const pivot = _pv2.copy(w.piv).applyQuaternion(b.q).add(b.x);
+    let lead = w.on === 'start' ? -Infinity : pivot.clone().sub(b.x).dot(across);
+    for (const c of b.contacts) {
+      const a = c.r.dot(across);
+      if (a > lead + 0.15) {
+        lead = a;
+        pivot.copy(b.x).add(c.r);
+        w.piv.copy(c.r).applyQuaternion(_rq.copy(b.q).invert());
+        w.on = 'body';
+      }
+    }
+    const onEdge = w.on === 'edge';
+    if (lead <= 0) return false;
+    const arm = _arm.copy(b.x).sub(pivot);
+    const off = _off.copy(arm).addScaledVector(axis, -arm.dot(axis)); // the edge to the centre, square to it
+    const d = off.length();
+    const s = Math.sqrt(Math.max(0.01, 1 - axis.y * axis.y)); // how much of g turns it about the edge
+    _al.copy(axis).applyQuaternion(_rq.copy(b.q).invert());
+    const ic = (_al.x * _al.x) / b.invI.x + (_al.y * _al.y) / b.invI.y + (_al.z * _al.z) / b.invI.z;
+    const hold = 0.85 * Math.sqrt((G * Math.max(0.3 * s, off.y / d)) / d);
+    const carry = Math.sqrt(0.35 * 0.35 + (2.4 * G * Math.max(0, d * s - off.y)) / (ic + d * d));
+    const target = Math.min(1.1, hold, carry);
+    const now = b.w.dot(axis);
+    // Its own count of how fast, not what the ground made of it last step.
+    if (w.spin === null) w.spin = now;
+    const spin = (w.spin += T.MathUtils.clamp(target - w.spin, -2.5 * STEP, 2.5 * STEP));
+    // The edge: where it was going, level, slowing; and on the ground.
+    if (!w.slide) {
+      w.slide = _J.crossVectors(b.w, arm).negate().add(b.v).setY(0).clone();
+      w.rest = b.w.clone().addScaledVector(axis, -now);
+    }
+    if (onEdge && w.h0 === null) w.h0 = Math.max(0, pivot.y - this.solid(pivot.x, pivot.z));
+    // What else it was turning with, from the landing: let go of over a
+    // third of a second, not at once.
+    const rest = _rest.copy(w.rest).multiplyScalar(Math.max(0, 1 - (w.steps * STEP) / 0.35));
+    // Nothing touching: the edge is a little above the ground; let it down.
+    if (onEdge && !b.contacts.length) w.h0 -= 0.4 * STEP;
+    const sl = w.slide.length();
+    if (sl > 0) w.slide.multiplyScalar(Math.max(0, sl - 0.9 * G * STEP) / sl);
+    const ahead = _J.copy(pivot).addScaledVector(w.slide, STEP);
+    const rise = onEdge ? (this.solid(ahead.x, ahead.z) + w.h0 - pivot.y) / STEP : (this.solid(ahead.x, ahead.z) - this.solid(pivot.x, pivot.z)) / STEP;
+    b.w.copy(axis).multiplyScalar(spin).add(rest);
+    b.v.crossVectors(b.w, arm).add(w.slide);
+    b.v.y += rise;
+    return true;
   }
 
   /** Advance by dt seconds of machine time; pose the car. Returns the
    * blows since the last call, for the sound and the dust. */
   update(dt) {
-    this.think(6);
     this.acc = Math.min(this.acc + dt, 0.25);
+    const b = this.body;
     while (this.acc >= STEP) {
-      if (this.steps === this.branchAt) {
-        this.think();
-        this.body.w.add(this.push.dw);
-        this.body.v.add(this.push.dv);
+      // Until the blow is over and it is down on the ground again, not in
+      // a hop; then over.
+      if (!this.begun) {
+        if (this.touched < 0 && b.contacts.length) this.touched = this.time;
+        const down = this.touched >= 0 && this.time - this.touched >= 0.3 && b.contacts.length >= 3 && Math.abs(b.v.y) < 0.5;
+        if (down || this.time > 2.5) this.begin();
       }
-      this.body.step(this.solid);
-      this.steps++;
+      if (this.driving && !this.roll(b, this.driving)) {
+        // Caught on something and still up after all that: the other way.
+        const stuck = this.driving.steps > 4 / STEP && b.up().y > 0.6;
+        this.driving = null;
+        if (stuck && !this.again) {
+          this.again = true;
+          this.driving = this.start(this.way(-this.side), b);
+        }
+      }
+      b.step(this.solid);
+      this.time += STEP;
       this.acc -= STEP;
     }
-    poseCar(this.car, this.body);
-    this.car.freeWheels(this.body.wheels, dt);
-    const hits = this.body.hits;
-    this.body.hits = [];
+    poseCar(this.car, b, 1, this.acc / STEP);
+    this.car.freeWheels(b.wheels, dt);
+    const hits = b.hits;
+    b.hits = [];
     return hits;
   }
 
