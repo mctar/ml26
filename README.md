@@ -59,7 +59,8 @@ Live at [moonlander.btrbot.com](https://moonlander.btrbot.com).
   the edge kept on the ground, past the balance, then falling the way a
   car falls and lying where it came to rest for the games after;
   `debris.js` a crash, from the car meeting what it hit to the pieces at
-  rest; `prints.js` boot prints.
+  rest, with the camera drawing back to keep the pieces in the picture;
+  `prints.js` boot prints.
 - `web/lab.html`: a page for checking the 2026 view, not linked from the
   site. It replays flights recorded by `tools/lab/record.mjs` through the
   real view frame by frame, and measures every frame: the driver's soles

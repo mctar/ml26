@@ -1160,6 +1160,10 @@ float blastAt(vec2 p){
     // Low elevation, as the 1973 side view was: the needle mountains read
     // as a skyline, and the depth behind them is the bonus.
     const up = close ? (this.walking ? 0.16 : 0.14) : T.MathUtils.lerp(0.06, 0.1, Math.min(1, d / 20000));
+    // After a crash, the pieces: drawing back as they fly, so they stay in
+    // the picture, and in again, slowly, on where they lie.
+    if (this.crash && this.exploded && close) d2 = this.frameDebris(look, d2, up, dt);
+    else this.debrisCam = null;
     const cam = new T.Vector3(look.x + d2 * 0.1, look.y + d2 * up, look.z + d2 * 0.95);
     // Keep the camera above the ground in front.
     cam.y = Math.max(cam.y, this.heightAt(cam.x, cam.z) + (close ? 6 : 25));
@@ -1209,6 +1213,8 @@ float blastAt(vec2 p){
     // Far out it takes in all the country in view, so the mountains throw
     // their shadows across it; close in, the car and the ground round it.
     let sunR = close ? T.MathUtils.clamp(alt * 1.2 + 70, 70, 900) : T.MathUtils.clamp(dist * 1.3, 3000, 60000);
+    // Wide enough for every piece of a crash to throw its shadow.
+    if (this.debrisCam) sunR = Math.min(900, Math.max(sunR, this.debrisCam.r + 20));
     // In the opening, close on the car: its own shadows on itself.
     if (this.opening && this.openingCentre) {
       const e = ease(this.opening.k);
@@ -1418,6 +1424,44 @@ float blastAt(vec2 p){
   }
 
   /** The camera and the rest follow the car as the free body has it. */
+  /**
+   * The crash's pieces in the picture: the camera's look point moved to
+   * their middle and its distance (as `d2`, the multiple of the camera's
+   * offset) set so that all of them, where they are and where they are
+   * going, are inside four-fifths of the frame. Out quickly, so nothing
+   * flies out of the picture; in slowly, so it does not pump.
+   */
+  frameDebris(look, d2, up, dt) {
+    const pts = this.crash.framePoints();
+    if (!pts.length) return d2;
+    if (!this.debrisCam) this.debrisCam = { c: look.clone(), d: d2, r: 0 };
+    const f = this.debrisCam;
+    // How the camera will stand: out from the look point along (0.1, up, 0.95).
+    const off = new T.Vector3(0.1, up, 0.95);
+    const len = off.length();
+    const back = off.divideScalar(len);
+    const right = new T.Vector3().crossVectors(back, new T.Vector3(0, -1, 0)).normalize();
+    const upward = new T.Vector3().crossVectors(right, back.clone().negate());
+    const box = new T.Box3().setFromPoints(pts);
+    const c = box.getCenter(new T.Vector3());
+    c.y = Math.max(c.y, this.groundAt(c.x, c.z) + 5);
+    const tv = Math.tan(T.MathUtils.degToRad(this.camera.fov / 2)) * 0.8;
+    const th = tv * this.camera.aspect;
+    let need = d2 * len;
+    const r = new T.Vector3();
+    for (const p of pts) {
+      r.copy(p).sub(c);
+      const depth = r.dot(back);
+      need = Math.max(need, Math.abs(r.dot(right)) / th + depth, Math.abs(r.dot(upward)) / tv + depth);
+    }
+    need = Math.min(need / len, 260);
+    f.c.lerp(c, 1 - Math.exp(-dt / 0.5));
+    f.d += (need - f.d) * (1 - Math.exp(-dt / (need > f.d ? 0.3 : 2.5)));
+    f.r = Math.hypot(box.max.x - box.min.x, box.max.z - box.min.z) / 2;
+    look.copy(f.c);
+    return f.d;
+  }
+
   followCar() {
     this.pose.x = this.car.group.position.x;
     this.pose.y = this.car.group.position.y;

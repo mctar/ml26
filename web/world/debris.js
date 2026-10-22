@@ -194,6 +194,7 @@ class Piece {
   constructor(object, body) {
     this.o = object;
     this.body = body;
+    this.big = false; // one the eye follows: the body, the wheels, the seat, the frame
   }
 
   /** Drawn `k` of the way through the body's last step. */
@@ -270,6 +271,27 @@ export class Crash {
     const ev = this.events;
     this.events = [];
     return ev;
+  }
+
+  /**
+   * What the camera should keep in the picture: where it hit, and the big
+   * pieces where they are and where they will be in a moment (so it is
+   * already drawing back when they fly).
+   */
+  framePoints(ahead = 0.6) {
+    const out = [];
+    if (!this.burst) return out;
+    out.push(this.burst.at);
+    for (const p of this.pieces) {
+      if (!p.big) continue;
+      const b = p.body;
+      out.push(b.x);
+      if (b.asleep) continue;
+      const q = b.x.clone().addScaledVector(b.v, ahead);
+      q.y = Math.max(q.y - 0.5 * G * ahead * ahead, this.solid(q.x, q.z));
+      out.push(q);
+    }
+    return out;
   }
 
   breakUp() {
@@ -365,7 +387,7 @@ export class Crash {
       const p = new T.Vector3().applyMatrix4(M);
       const v = leave(new T.Vector3((x0 + x1) / 2, 1.4, 0).applyMatrix4(M), hard ? 6 : 3.5, 2);
       const body = boxBody(g, 0.85, 0.2, 5);
-      add(m, body, p, v, spin(hard ? 2.5 : 1.2).add(b.w));
+      add(m, body, p, v, spin(hard ? 2.5 : 1.2).add(b.w)).big = true;
     }
     // The wheels, whole, turning: they roll off where they land.
     for (const w of car.wheels) {
@@ -390,6 +412,7 @@ export class Crash {
       const wv = spin(hard ? 3 : 1.5).addScaledVector(axle, -(v.x / w.r) * 0.8);
       body.set(p, new T.Quaternion().setFromRotationMatrix(_m.extractRotation(w.group.matrixWorld)), v, wv);
       const piece = new Piece(holder, body);
+      piece.big = true;
       piece.pose();
       this.pieces.push(piece);
     }
@@ -402,7 +425,7 @@ export class Crash {
       const m = new T.Mesh(g, car.mats.dark);
       m.castShadow = true;
       const p = new T.Vector3().applyMatrix4(M);
-      add(m, boxBody(g, 0.7, 0.3, 8), p, leave(new T.Vector3(-0.7, 3.2, 0).applyMatrix4(M), 4, 1.5), spin(3));
+      add(m, boxBody(g, 0.7, 0.3, 8), p, leave(new T.Vector3(-0.7, 3.2, 0).applyMatrix4(M), 4, 1.5), spin(3)).big = true;
     }
     const glass = this.kit.glass;
     for (let i = 0; i < (hard ? 22 : 14); i++) {
@@ -420,7 +443,7 @@ export class Crash {
       const m = new T.Mesh(g, f.material);
       m.castShadow = true;
       const p = new T.Vector3().applyMatrix4(M);
-      add(m, boxBody(g, 0.9, 0.2, 8), p, leave(f.position.clone().applyMatrix4(M), 7, 3), spin(3));
+      add(m, boxBody(g, 0.9, 0.2, 8), p, leave(f.position.clone().applyMatrix4(M), 7, 3), spin(3)).big = true;
     }
     for (let i = 0; i < (hard ? 46 : 22); i++) {
       const dark = R() < 0.35;
