@@ -21,7 +21,10 @@ Live at [moonlander.btrbot.com](https://moonlander.btrbot.com).
   frame; `phosphor.js` is the recovery's P39 phosphor model on the GPU;
   `roadster.js` is the 2026 view (three.js: the land round the TERAIN
   table, the diner, what earlier games left behind, the camera, with the
-  pieces from `world/`); `sound.js` is what the driver hears; `main.js` paces the
+  pieces from `world/`, and a crash shown again, slowly, from low down by
+  where it hit, before its card); `sound.js` is what the driver hears,
+  every blow coming to him through the car, there being no air to bring
+  it; `main.js` paces the
   machine against the clock, keeps the two views, turns the controls into
   the pen, and holds the machine still while the guide, About or an end
   card is open. The page opens on the tube, with the program's own
@@ -32,7 +35,9 @@ Live at [moonlander.btrbot.com](https://moonlander.btrbot.com).
   (`world/earth.jpg`). Every way a flight can end (lunch at the diner, a flag, a
   tip-over, a crater, a boulder, someone else's car, the diner itself) gets
   its own card; Play again runs through the program's own wait at speed
-  and keeps the Moon, with everything earlier flights left on it. `vendor/three.js` is a bundled subset of three.js, built
+  and keeps the Moon, with everything earlier flights left on it: flags,
+  wrecks, the pieces of the last few crashes, craters, and every mark in
+  the ground. The camera takes the car's blows. `vendor/three.js` is a bundled subset of three.js, built
   from `vendor/three-entry.js` with esbuild.
 - `web/world/`: the pieces of the 2026 view. `land.js` is the country
   round the flight line: Burness's skyline exact along the line, his
@@ -42,12 +47,15 @@ Live at [moonlander.btrbot.com](https://moonlander.btrbot.com).
   `landworker.js` works out its heights and the sunlight on each of its
   points (the shadows of mountains miles away) off the page's thread.
   `car.js` is the Roadster,
-  lofted from a few profiles, on springs that keep it on the ground;
+  lofted from a few profiles, on springs that keep it on the ground, and
+  dented, its canopy cracked, when it comes down too fast or goes over
+  (a car left from that game stays as hurt);
   `astronaut.js` the driver, posed by two-bone inverse kinematics, with a
   low-gravity lope that plants his feet where they land; `choreo.js` the
   climb out and back in, keyed in the car's frame; `driver.js` runs him
   from the program's own man (PALSY, PALNOR, MOVMAN), early enough to be
-  on time; `props.js` the flag and the order; `plume.js` the cold-gas
+  on time, and in his seat sways with what the car does, hangs in his
+  belts when it lies on its side, and looks about him once it is still; `props.js` the flag and the order; `plume.js` the cold-gas
   jets, raymarched; `ballistic.js` dust and ejecta on vacuum trajectories,
   and the sheet of dust the jets drive along the ground; `rigid.js` rigid
   bodies against the ground (the terrain, the boulders, the diner's roof,
@@ -60,7 +68,9 @@ Live at [moonlander.btrbot.com](https://moonlander.btrbot.com).
   car falls and lying where it came to rest for the games after;
   `debris.js` a crash, from the car meeting what it hit to the pieces at
   rest, with the camera drawing back to keep the pieces in the picture;
-  `prints.js` boot prints.
+  `prints.js` boot prints; `marks.js` the other marks in the ground, tyre
+  prints and treads, the furrows a car on its side or its pieces drag,
+  drawn onto the ground as disturbed regolith catching the low sun.
 - `web/lab.html`: a page for checking the 2026 view, not linked from the
   site. It replays flights recorded by `tools/lab/record.mjs` through the
   real view frame by frame, and measures every frame: the driver's soles

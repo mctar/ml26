@@ -142,7 +142,9 @@ export class Driver {
         this.mode = 'exit';
         this.t = 0;
       }
-      this.pose(this.choreo.pose(0, car, ground, { carry: this.carry === 'box' }));
+      const seat = this.choreo.pose(0, car, ground, { carry: this.carry === 'box' });
+      this.jostle(seat, car, dt, state, mt);
+      this.pose(seat);
       car.setCanopy(Math.max(0, car.canopyOpen - dt / 1.2));
       this.x = undefined;
       return;
@@ -154,6 +156,7 @@ export class Driver {
       this.t = Math.min(this.choreo.duration, this.t + dt * (this.plan && this.plan.flag ? 1.3 : 1));
       car.setCanopy(canopyOut(this.t));
       const pose = this.choreo.pose(this.t, car, ground);
+      this.unsway(pose, dt);
       this.pose(pose);
       this.x = pose.pelvis.x;
       if (this.t >= this.choreo.duration) {
@@ -192,6 +195,99 @@ export class Driver {
         this.x = undefined;
       }
     }
+  }
+
+  /**
+   * In his seat he is not part of the car. Belted in, he still sways as
+   * it is thrown about: leans into what it does, lags it and catches up;
+   * nods as it comes down hard; on its side, hangs in his belts toward
+   * the ground. Springs in the car's frame, driven by what he feels there:
+   * its acceleration against the Moon's pull, and its turning. Over and
+   * still, he braces himself and looks about him, if the program has let
+   * him live.
+   */
+  jostle(pose, car, dt, state, mt) {
+    const j = this.sway || (this.sway = { lean: 0, lv: 0, roll: 0, rv: 0, nod: 0, nv: 0, head: 0, hv: 0, p: null, q: null, v: new T.Vector3(), a: new T.Vector3(), w: new T.Vector3(), al: new T.Vector3(), still: 0 });
+    car.body.updateWorldMatrix(true, false);
+    const p = new T.Vector3().setFromMatrixPosition(car.body.matrixWorld);
+    const q = car.body.getWorldQuaternion(new T.Quaternion());
+    if (!j.p || !(dt > 0) || dt > 0.1 || p.distanceTo(j.p) > 20) {
+      // A cut, a new game, a pause: start from rest.
+      Object.assign(j, { lean: 0, lv: 0, roll: 0, rv: 0, nod: 0, nv: 0, head: 0, hv: 0, p, q, still: 0 });
+      j.v.set(0, 0, 0);
+      j.a.set(0, 0, 0);
+      j.w.set(0, 0, 0);
+      j.al.set(0, 0, 0);
+      return;
+    }
+    const v = p.clone().sub(j.p).divideScalar(dt);
+    j.a.lerp(v.clone().sub(j.v).divideScalar(dt), 1 - Math.exp(-dt / 0.04));
+    j.v.copy(v);
+    const dq = q.clone().multiply(j.q.clone().invert());
+    if (dq.w < 0) dq.set(-dq.x, -dq.y, -dq.z, -dq.w);
+    const ang = 2 * Math.acos(Math.min(1, dq.w));
+    const w = ang > 1e-6 ? new T.Vector3(dq.x, dq.y, dq.z).normalize().multiplyScalar(ang / dt) : new T.Vector3();
+    j.al.lerp(w.clone().sub(j.w).divideScalar(dt), 1 - Math.exp(-dt / 0.05));
+    j.w.copy(w);
+    j.p = p;
+    j.q = q;
+    // What he feels, in the car's frame: up, at a sixth of a g, standing.
+    const qi = q.clone().invert();
+    const f = j.a.clone().add(new T.Vector3(0, BODY.G, 0)).applyQuaternion(qi);
+    const al = j.al.clone().applyQuaternion(qi);
+    const g = BODY.G;
+    const S = this.world.symbols;
+    const dead = S.ANGLEJ !== undefined && state.sysmes === S.ANGLEJ;
+    // Over and still: he braces against it, or does not.
+    const tp = this.world.topple;
+    j.still = tp && tp.resting ? j.still + dt : 0;
+    const brace = dead ? 0 : smoothstep(1.0, 2.5, j.still);
+    const give = (dead ? 0.6 : 0.42) * (1 - 0.55 * brace);
+    const leanTo = clamp((-f.x / g) * give, -0.4, 0.4);
+    const rollTo = clamp((-f.z / g) * give, -0.35, 0.35);
+    const nodTo = clamp(((f.y - g) / g) * 0.012 + (dead && tp ? 0.35 : 0), -0.2, 0.45);
+    const om = 2 * Math.PI * 1.3, ze = 0.38, c = 0.5;
+    const spring = (x, xv, to, push) => {
+      const acc = om * om * (to - x) - 2 * ze * om * xv + push;
+      xv += clamp(acc, -60, 60) * dt;
+      return [x + xv * dt, xv];
+    };
+    [j.lean, j.lv] = spring(j.lean, j.lv, leanTo, c * al.z);
+    [j.roll, j.rv] = spring(j.roll, j.rv, rollTo, -c * al.x);
+    [j.nod, j.nv] = spring(j.nod, j.nv, nodTo, 0);
+    // The head rides on the body, a beat behind it, and goes further.
+    const h = 2 * Math.PI * 2;
+    j.hv += (h * h * (j.roll * 0.5 - j.head) - 2 * 0.3 * h * j.hv) * dt;
+    j.head += j.hv * dt;
+    // Back, the seat stops him.
+    const lean = Math.max(0, j.lean);
+    pose.lean = (pose.lean || 0) + lean;
+    pose.torsoRoll = j.roll;
+    pose.look = (pose.look || 0) + j.nod + lean * 0.4;
+    pose.headRoll = j.head;
+    if (brace > 0) {
+      // Looking about him: where he is, which way is up.
+      pose.headYaw = brace * (0.55 * Math.sin(mt * 0.8) + 0.2 * Math.sin(mt * 1.9 + 1));
+      pose.look -= brace * 0.15 * (1 + Math.sin(mt * 0.6));
+    }
+  }
+
+  /** Out of his seat: whatever sway he had dies away, not at once. */
+  unsway(pose, dt) {
+    const j = this.sway;
+    if (!j || !(dt > 0)) return;
+    const k = Math.exp(-dt / 0.15);
+    j.lean *= k;
+    j.roll *= k;
+    j.nod *= k;
+    j.head *= k;
+    j.lv = j.rv = j.nv = j.hv = 0;
+    j.p = null; // and starts afresh when he sits again
+    const lean = Math.max(0, j.lean);
+    pose.lean = (pose.lean || 0) + lean;
+    pose.torsoRoll = j.roll;
+    pose.look = (pose.look || 0) + j.nod + lean * 0.4;
+    pose.headRoll = j.head;
   }
 
   /** A point beside the car, from its frame, on the ground. */

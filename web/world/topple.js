@@ -72,6 +72,8 @@ export class Topple {
     this.driving = null;
     this.side = 0;
     this.again = false; // tried the other way
+    this.events = []; // for the sound and the view: creaks
+    this.down = false; // over, and come down on its body
   }
 
   /** Over its tyres on that side (+1, -1: the car's own z). */
@@ -94,6 +96,7 @@ export class Topple {
       this.side = Math.abs(dh) > 0.15 ? -Math.sign(dh) : this.seed < 0.5 ? 1 : -1;
     }
     this.driving = this.start(this.way(this.side), b);
+    this.events.push({ kind: 'creak', at: b.x.clone(), k: 1 });
   }
 
   /** A way, ready to drive a body from where it is now. */
@@ -171,8 +174,9 @@ export class Topple {
     return true;
   }
 
-  /** Advance by dt seconds of machine time; pose the car. Returns the
-   * blows since the last call, for the sound and the dust. */
+  /** Advance by dt seconds of machine time; pose the car. Returns what
+   * happened since the last call (blows, creaks), for the sound, the
+   * dust and the camera. */
   update(dt) {
     this.acc = Math.min(this.acc + dt, 0.25);
     const b = this.body;
@@ -194,14 +198,36 @@ export class Topple {
         }
       }
       b.step(this.solid);
+      if (this.marks) this.marks.traceBody(b, { scrape: 1.4 });
+      // Over the balance and down on its side: the body meets the ground,
+      // however gently it came.
+      if (this.begun && !this.driving && !this.down) {
+        const body = b.contacts.filter((c) => !c.wheel);
+        if (body.length) {
+          this.down = true;
+          const c = body.reduce((a, x) => (x.vin > a.vin ? x : a));
+          this.events.push({ kind: 'blow', at: c.r.clone().add(b.x), speed: Math.max(5, c.vin), down: true });
+          this.blowAt = this.time;
+        }
+      }
       this.time += STEP;
       this.acc -= STEP;
     }
     poseCar(this.car, b, 1, this.acc / STEP);
     this.car.freeWheels(b.wheels, dt);
-    const hits = b.hits;
+    const ev = this.events;
+    // A blow is heard and seen once, not at every step it lasts: the
+    // hardest in each quarter second, if it is a blow at all.
+    if (b.hits.length && this.time - (this.blowAt ?? -1) > 0.25) {
+      const h = b.hits.reduce((a, c) => (c.speed > a.speed ? c : a));
+      if (h.speed > 4) {
+        this.blowAt = this.time;
+        ev.push({ kind: 'blow', at: h.at, speed: h.speed });
+      }
+    }
     b.hits = [];
-    return hits;
+    this.events = [];
+    return ev;
   }
 
   get resting() {

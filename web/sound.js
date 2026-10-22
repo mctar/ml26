@@ -97,7 +97,7 @@ export class Sound {
     }
   }
 
-  burst(duration, gain, freq, q) {
+  burst(duration, gain, freq, q, to = this.master) {
     const ac = this.ac;
     const src = ac.createBufferSource();
     src.buffer = this.noise;
@@ -108,7 +108,7 @@ export class Sound {
     const g = ac.createGain();
     g.gain.setValueAtTime(gain, ac.currentTime);
     g.gain.exponentialRampToValueAtTime(0.0005, ac.currentTime + duration);
-    src.connect(f).connect(g).connect(this.master);
+    src.connect(f).connect(g).connect(to);
     src.start();
     src.stop(ac.currentTime + duration + 0.05);
   }
@@ -119,30 +119,113 @@ export class Sound {
     this.burst(0.12, 0.15, 2400, 1.2);
   }
 
-  /** Wheels on the ground, harder with speed. */
-  contact(fps) {
+  /**
+   * A blow, as it reaches the driver: through the tyres, the frame and
+   * the seat, there being no air to bring it. The whole car moving, a low
+   * thump; the body panels ringing a little, none in tune with another;
+   * the grit of the ground giving under it. Harder with speed, and never
+   * twice quite the same. `far`: felt through the ground, not the car
+   * (a piece of it coming down somewhere else), and softer.
+   */
+  thud(speed, far = false) {
     if (!this.ac) return;
-    const ac = this.ac;
-    const k = Math.min(1, Math.abs(fps) / 40);
+    const ac = this.ac, t = ac.currentTime;
+    // A rattle of small blows is heard as one.
+    if (this.lastThud !== undefined && t - this.lastThud < (far ? 0.09 : 0.05)) return;
+    this.lastThud = t;
+    const k = Math.min(1, Math.abs(speed) / 30);
+    const v = 0.9 + Math.random() * 0.2;
+    const level = far ? 0.35 : 1;
+    const out = ac.createBiquadFilter();
+    out.type = 'lowpass';
+    out.frequency.value = far ? 500 : 1800;
+    out.connect(this.master);
     const o = ac.createOscillator();
     o.type = 'sine';
-    o.frequency.setValueAtTime(70, ac.currentTime);
-    o.frequency.exponentialRampToValueAtTime(30, ac.currentTime + 0.3);
+    o.frequency.setValueAtTime((70 + 35 * k) * v, t);
+    o.frequency.exponentialRampToValueAtTime(27, t + 0.22 + 0.25 * k);
     const g = ac.createGain();
-    g.gain.setValueAtTime(0.4 + 0.5 * k, ac.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.0005, ac.currentTime + 0.35);
-    o.connect(g).connect(this.master);
-    o.start();
-    o.stop(ac.currentTime + 0.4);
-    this.burst(0.2 + 0.3 * k, 0.2 + 0.4 * k, 300, 0.8);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime((0.3 + 0.55 * k) * level, t + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0005, t + 0.3 + 0.4 * k);
+    o.connect(g).connect(out);
+    o.start(t);
+    o.stop(t + 0.75 + 0.4 * k);
+    if (!far) {
+      for (const [f, a, d] of [[163, 1, 0.24], [347, 0.6, 0.17], [611, 0.4, 0.12], [1013, 0.22, 0.08]]) {
+        const p = ac.createOscillator();
+        p.type = 'sine';
+        p.frequency.value = f * v * (0.97 + Math.random() * 0.06);
+        const pg = ac.createGain();
+        pg.gain.setValueAtTime(0.0001, t);
+        pg.gain.exponentialRampToValueAtTime(0.0001 + a * 0.05 * (0.3 + k), t + 0.004);
+        pg.gain.exponentialRampToValueAtTime(0.00005, t + d * (0.7 + k));
+        p.connect(pg).connect(out);
+        p.start(t);
+        p.stop(t + d * (0.7 + k) + 0.05);
+      }
+    }
+    this.burst(0.1 + 0.25 * k, (0.12 + 0.35 * k) * level, 220 * v, 0.7, out);
   }
 
-  /** The end of the car. */
-  explosion(hard = true) {
+  /**
+   * The car taking a twist it was not built for, as it goes up on two
+   * wheels: metal and bolts slipping and catching, a stutter through a
+   * narrow band.
+   */
+  creak(k = 1, seconds = 1.1) {
     if (!this.ac) return;
-    this.burst(hard ? 1.6 : 1.1, hard ? 0.9 : 0.75, 180, 0.5);
-    this.burst(0.5, 0.6, 1200, 0.7);
-    this.contact(60);
+    const ac = this.ac, t = ac.currentTime;
+    const o = ac.createOscillator();
+    o.type = 'sawtooth';
+    const base = 16 + 8 * Math.random();
+    o.frequency.setValueAtTime(base, t);
+    o.frequency.linearRampToValueAtTime(base * 1.9, t + seconds * 0.55);
+    o.frequency.linearRampToValueAtTime(base * 1.2, t + seconds);
+    // The stutter: the rate itself wavering.
+    const lfo = ac.createOscillator();
+    lfo.frequency.value = 6 + 3 * Math.random();
+    const depth = ac.createGain();
+    depth.gain.value = base * 0.45;
+    lfo.connect(depth).connect(o.frequency);
+    const bp = ac.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 780 + 300 * Math.random();
+    bp.Q.value = 7;
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.45 * k, t + seconds * 0.3);
+    g.gain.setValueAtTime(0.45 * k, t + seconds * 0.7);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + seconds);
+    o.connect(bp).connect(g).connect(this.master);
+    o.start(t);
+    lfo.start(t);
+    o.stop(t + seconds + 0.05);
+    lfo.stop(t + seconds + 0.05);
+  }
+
+  /** The end of the car; or, shown again slowly (`slow`), the same an
+   * octave down and drawn out, and softer. */
+  explosion(hard = true, slow = false) {
+    if (!this.ac) return;
+    const s = slow ? 2 : 1, g = slow ? 0.6 : 1;
+    this.burst((hard ? 1.6 : 1.1) * s, (hard ? 0.9 : 0.75) * g, 180 / s, 0.5);
+    this.burst(0.5 * s, 0.6 * g, 1200 / s, 0.7);
+    if (slow) {
+      // The thump, slowed: lower, longer.
+      const ac = this.ac, t = ac.currentTime;
+      const o = ac.createOscillator();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(52, t);
+      o.frequency.exponentialRampToValueAtTime(18, t + 1.1);
+      const gg = ac.createGain();
+      gg.gain.setValueAtTime(0.0001, t);
+      gg.gain.exponentialRampToValueAtTime(0.6, t + 0.02);
+      gg.gain.exponentialRampToValueAtTime(0.0005, t + 1.3);
+      o.connect(gg).connect(this.master);
+      o.start(t);
+      o.stop(t + 1.4);
+    } else this.thud(60);
   }
 
   /** Air low: two soft notes, as a car would. */

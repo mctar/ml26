@@ -439,6 +439,8 @@ export class Car {
     body.receiveShadow = true;
     this.body.add(body);
     this.bodyMesh = body;
+    this.bodyGeo0 = bodyGeo; // as built: what mend() puts back
+    this.damageLevel = 0;
 
     // Cockpit: a seat, a dash, a yoke, a screen.
     for (const f of FITTINGS) {
@@ -475,9 +477,62 @@ export class Car {
     this.canopy.position.copy(this.hingeAt);
     const cg = canopyGeometry();
     cg.translate(-this.hingeAt.x, -this.hingeAt.y, 0);
+    // The glass, which a hard landing can crack: a star of cracks about
+    // where it took the blow, drawn into the glass itself.
+    this.crack = { value: new T.Vector4(0, 0, 0, 0) }; // where (canopy-local), and how far the cracks run (0: none)
+    this.crackN = { value: new T.Vector3(0, 1, 0) };
+    this.mats.glass.onBeforeCompile = (sh) => {
+      sh.uniforms.uCrack = this.crack;
+      sh.uniforms.uCrackN = this.crackN;
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vCanopy;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvCanopy = position;');
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', `#include <common>
+varying vec3 vCanopy;
+uniform vec4 uCrack;
+uniform vec3 uCrackN;
+float crackHash(float n) { return fract(sin(n * 91.7) * 43758.5453); }
+// Cracks out from the blow along jagged spokes, and rings across them
+// part of the way round: how laminated glass breaks.
+float cracked(vec3 p) {
+  if (uCrack.w <= 0.0) return 0.0;
+  vec3 d = p - uCrack.xyz;
+  vec3 t1 = cross(uCrackN, vec3(0.0, 0.0, 1.0));
+  t1 = dot(t1, t1) < 1e-4 ? vec3(1.0, 0.0, 0.0) : normalize(t1);
+  vec3 t2 = cross(uCrackN, t1);
+  vec2 q = vec2(dot(d, t1), dot(d, t2));
+  float r = length(q);
+  if (r > uCrack.w) return 0.0;
+  float a = atan(q.y, q.x) / 6.28318 + 0.5;
+  float n = 9.0;
+  float k = floor(a * n);
+  float wob = 0.06 * sin(r * 7.0 + k * 2.3) + 0.03 * sin(r * 19.0 + k * 5.1);
+  float s = fract(a * n + 0.5 * (crackHash(k + 11.0) - 0.5) + wob);
+  float arc = abs(s - 0.5) * 6.28318 * r / n;
+  float reach = uCrack.w * (0.45 + 0.55 * crackHash(k + 3.0));
+  float w = 0.004 + fwidth(r) * 0.5;
+  float spoke = (1.0 - smoothstep(w * 0.5, w, arc - 0.0)) * step(r, reach) * step(abs(s - 0.5), 0.45);
+  float ring = 0.0;
+  for (int i = 0; i < 3; i++) {
+    float ri = uCrack.w * (0.14 + 0.2 * float(i) + 0.06 * crackHash(k + float(i) * 7.0));
+    float on = step(0.6, crackHash(k * 3.0 + float(i)));
+    ring = max(ring, on * (1.0 - smoothstep(w * 0.5, w, abs(r - ri - 0.02 * sin(a * 40.0)))));
+  }
+  float core = 1.0 - smoothstep(0.02, 0.07, r);
+  return clamp(max(max(spoke, ring), core), 0.0, 1.0) * (1.0 - smoothstep(uCrack.w * 0.8, uCrack.w, r));
+}`)
+        .replace('#include <opaque_fragment>', `{
+  float cr = cracked(vCanopy);
+  outgoingLight = mix(outgoingLight, vec3(0.7), cr * 0.5);
+  diffuseColor.a = max(diffuseColor.a, cr * 0.6);
+}
+#include <opaque_fragment>`);
+    };
     const glass = new T.Mesh(cg, this.mats.glass);
     glass.renderOrder = 2;
     this.canopy.add(glass);
+    this.canopyGeo = cg;
     // Its frame, a thin dark rim along the base.
     const rimPts = [];
     for (let i = 0; i <= 48; i++) {
@@ -508,6 +563,7 @@ export class Car {
         }
         const strip = new T.Mesh(new T.TubeGeometry(new T.CatmullRomCurve3(pts), 16, 0.035, 6, false), this.mats.lamp);
         this.body.add(strip);
+        (this.lamps = this.lamps || []).push(strip);
       }
       const tp = [];
       for (let i = 0; i <= 16; i++) {
@@ -579,6 +635,56 @@ export class Car {
     this.airborne = true;
     this._v = new T.Vector3();
     this._q = new T.Quaternion();
+  }
+
+  /**
+   * Hurt by a landing the program calls a little fast (`level` 1) or too
+   * fast, damage done (2), or by going over: the floor and the lower
+   * edges pushed in where they met the ground, a few dents in the skin,
+   * the canopy cracked from where it took the blow; too fast, a wheel
+   * knocked out of true and a lamp gone. From `seed`, so a car left from
+   * an earlier game can be hurt the same way again.
+   */
+  damage(level, seed = 1) {
+    if (level <= this.damageLevel) return;
+    this.mend();
+    this.damageLevel = level;
+    let s = (seed * 2654435761) >>> 0 || 1;
+    const R = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+    const g = this.bodyGeo0.clone();
+    hurt(g, level, R);
+    this.bodyMesh.geometry = g;
+    // The crack: somewhere on the upper half of the bubble.
+    const pos = this.canopyGeo.attributes.position, nor = this.canopyGeo.attributes.normal;
+    let best = 0, bestY = -Infinity;
+    for (let k = 0; k < 24; k++) {
+      const i = Math.floor(R() * pos.count);
+      const y = pos.getY(i) + R() * 0.4;
+      if (y > bestY) {
+        bestY = y;
+        best = i;
+      }
+    }
+    this.crack.value.set(pos.getX(best), pos.getY(best), pos.getZ(best), level >= 2 ? 1.0 + 0.4 * R() : 0.45 + 0.2 * R());
+    this.crackN.value.set(nor.getX(best), nor.getY(best), nor.getZ(best)).normalize();
+    if (level >= 2) {
+      const w = this.wheels[Math.floor(R() * this.wheels.length)];
+      w.group.rotation.set((R() - 0.5) * 0.3, (R() - 0.5) * 0.24, 0);
+      if (this.lamps) this.lamps[Math.floor(R() * this.lamps.length)].visible = false;
+    }
+  }
+
+  /** Whole again, for a new game. */
+  mend() {
+    if (!this.damageLevel) return;
+    this.damageLevel = 0;
+    if (this.bodyMesh.geometry !== this.bodyGeo0) {
+      this.bodyMesh.geometry.dispose();
+      this.bodyMesh.geometry = this.bodyGeo0;
+    }
+    this.crack.value.w = 0;
+    for (const w of this.wheels) w.group.rotation.set(0, 0, 0);
+    for (const l of this.lamps || []) l.visible = true;
   }
 
   setCanopy(open) {
@@ -726,6 +832,45 @@ export class Car {
       if (o.geometry) o.geometry.dispose();
     });
   }
+}
+
+/**
+ * A car body as a hard landing leaves it: the floor and the lower edges
+ * pushed up and in where they met the ground, more toward the ends; a few
+ * broad dents in the skin, each about a point.
+ */
+function hurt(g, level, R) {
+  const p = g.attributes.position;
+  const floor = CAR.CLEAR + 0.5;
+  const crush = level >= 2 ? 0.16 : 0.06;
+  const ph = R() * 6.28;
+  const dents = [];
+  for (let k = 0; k < (level >= 2 ? 5 : 2); k++) {
+    dents.push({ x: (R() - 0.5) * 2 * (CAR.HALF - 0.8), z: (R() < 0.5 ? -1 : 1) * (1.2 + R() * 1.4), y: 0.8 + R() * 1.6, r: 0.5 + R() * 0.6, d: (level >= 2 ? 0.17 : 0.08) * (0.6 + R()) });
+  }
+  for (let i = 0; i < p.count; i++) {
+    let x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+    // Underneath: up, unevenly, most at the ends where it came down.
+    if (y < floor) {
+      const f = 1 - y / floor;
+      const ends = 0.5 + 0.5 * Math.min(1, Math.abs(x) / CAR.HALF) ** 2;
+      y += crush * f * ends * (0.7 + 0.3 * Math.sin(x * 1.7 + ph));
+      z *= 1 - crush * 0.15 * f * ends;
+    }
+    for (const d of dents) {
+      const dx = x - d.x, dy = y - d.y, dz = z - d.z;
+      const t = 1 - Math.sqrt(dx * dx + dy * dy + dz * dz) / d.r;
+      if (t <= 0) continue;
+      // In toward the car's middle line.
+      const k = d.d * t * t * (3 - 2 * t);
+      const l = Math.hypot(y - 1.2, z) || 1;
+      y -= ((y - 1.2) / l) * k;
+      z -= (z / l) * k;
+    }
+    p.setXYZ(i, x, y, z);
+  }
+  p.needsUpdate = true;
+  safeNormals(g);
 }
 
 /** Dent a geometry: push vertices in by noise, for wrecks and debris. */

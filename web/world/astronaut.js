@@ -344,8 +344,8 @@ export class Astronaut {
     this.root.position.copy(pose.pelvis);
     this.root.quaternion.copy(pose.orient);
     this.pelvis.rotation.set(pose.roll || 0, 0, -(pose.hipPitch || 0));
-    this.torso.rotation.set(0, pose.twist || 0, -(pose.lean || 0));
-    this.head.rotation.set(0, pose.headYaw || 0, -(pose.look || 0));
+    this.torso.rotation.set(pose.torsoRoll || 0, pose.twist || 0, -(pose.lean || 0));
+    this.head.rotation.set(pose.headRoll || 0, pose.headYaw || 0, -(pose.look || 0));
     this.root.updateMatrixWorld(true);
     for (let i = 0; i < 2; i++) {
       const f = pose.feet[i];

@@ -508,18 +508,23 @@ class Page {
   sounds() {
     const s = this.state, p = this.prev;
     if (!s) return;
+    // A crash shown again only where it can be seen; and shown as such.
+    this.roadster.replays = this.view !== 'tube';
+    document.body.classList.toggle('replaying', !!this.roadster.replay && this.view !== 'tube');
     const exploded = this.roadster.exploded;
     this.sound.update(exploded ? 0 : this.roadster.thrustNow, s, 0);
     const alt = (this.alt = this.altitude(s));
     // The car's own blows and the burst, when the 2026 view has them; the
     // program's explosion when it is far out and the view has none.
     for (const e of this.roadster.takeEvents()) {
-      if (e.kind === 'burst' && this.view !== 'tube') this.sound.explosion(e.hard);
-      else if (e.kind === 'blow') this.sound.contact(Math.min(40, e.speed * 2));
+      if (e.kind === 'burst' && this.view !== 'tube') this.sound.explosion(e.hard, !!e.replay);
+      else if (e.kind === 'blow') this.sound.thud(Math.min(40, e.speed * 2));
+      else if (e.kind === 'debris' && e.speed > 5) this.sound.thud(e.speed, true);
+      else if (e.kind === 'creak') this.sound.creak(e.k);
     }
     if (p) {
       if (s.radius > 0 && p.radius === 0 && (this.view === 'tube' || !this.roadster.crash)) this.sound.explosion();
-      else if (alt <= 0 && this.altPrev > 0 && s.verdis < 450 && !exploded && !this.roadster.topple) this.sound.contact(p.vervel / 10);
+      else if (alt <= 0 && this.altPrev > 0 && s.verdis < 450 && !exploded && !this.roadster.topple) this.sound.thud(p.vervel / 10);
       if (this.roadster.puffing && !this.puffWas) this.sound.puff();
     }
     this.puffWas = this.roadster.puffing;
@@ -627,7 +632,8 @@ class Page {
     if (f.kind) {
       // The card waits for the controller to finish talking, and a breath
       // after; not for ever, should the sound be stuck.
-      if (!f.shown && s.t >= f.at.t + ENDINGS[f.kind].after * 1e6) {
+      // Nor while the crash is being shown again.
+      if (!f.shown && s.t >= f.at.t + ENDINGS[f.kind].after * 1e6 && !this.roadster.replay) {
         f.due ??= performance.now();
         if (this.radio.idle(600) || performance.now() - f.due > 8000) this.ending(f);
       }
@@ -1122,6 +1128,12 @@ class Page {
       this.wake();
       if (ev.key === '?') {
         this.show('guide');
+        ev.preventDefault();
+        return;
+      }
+      // A replay can be cut short.
+      if (this.roadster.replay && ['Enter', 'Space', 'Escape'].includes(ev.code)) {
+        this.roadster.endReplay();
         ev.preventDefault();
         return;
       }

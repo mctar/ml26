@@ -20,6 +20,7 @@ import { Topple, carBody, poseCar, COM } from './world/topple.js';
 import { STEP } from './world/rigid.js';
 import { Land, landRings, ringIndex, ringChunks, landSurfaces } from './world/land.js';
 import { Prints } from './world/prints.js';
+import { Marks } from './world/marks.js';
 import { makeEnvironment } from './world/env.js';
 import { hash } from './world/shape.js';
 
@@ -133,6 +134,7 @@ export class Roadster {
     this.scene.add(this.man.root);
     this.props = new Props(this.scene, this.env, (x, z) => this.groundAt(x, z));
     this.prints = new Prints(this.scene);
+    this.marks = new Marks(this.scene, this.sunDir, (x, z) => this.groundAt(x, z));
     this.driver = new Driver(this);
     this.exhaust = new Exhaust(this.scene, this.car, this.sunDir);
     this.dust = new DustSheet(this.scene, this.random);
@@ -143,6 +145,8 @@ export class Roadster {
     this.topple = null; // the car going over
     this.events = []; // for the sound: blows, the burst
     this.wreckPoses = new Map(); // terrain index: how a tipped car came to lie
+    this.parkedDamage = new Map(); // terrain index: how a car left there was hurt coming down
+    this.debrisFields = []; // the pieces of the last few crashes, where they came to rest
     this.composer = null;
     this.thrustNow = 0;
     this.mtime = 0;
@@ -325,6 +329,9 @@ void main() {
         const lay = f === FEATURE.OLD_SHIP ? null : this.wreckPoses.get(i) || this.wreckPoses.get(i - 1) || this.wreckPoses.get(i + 1);
         const car = new Car({ kind: f === FEATURE.OLD_SHIP ? 'parked' : 'tipped', env: this.env });
         car.setCanopy(f === FEATURE.OLD_SHIP ? 1 : 0);
+        // As it was hurt coming down; a tipped one, by going over.
+        const hurt = f === FEATURE.OLD_SHIP ? this.parkedDamage.get(i) || this.parkedDamage.get(i - 1) || this.parkedDamage.get(i + 1) : { level: 1, seed: i + 1 };
+        if (hurt) car.damage(hurt.level, hurt.seed);
         this.leftovers.add(car.group);
         this.leftoverAt.push({ kind: 'car', car, x, a: 0, lay, wreck: f !== FEATURE.OLD_SHIP });
       }
@@ -465,6 +472,12 @@ void main() {
     this.placeLeftovers();
     this.prints.reground((x, z) => this.groundAt(x, z));
     this.prints.visible = sy < 1;
+    this.marks.reground();
+    this.marks.visible = sy < 1;
+    for (const f of this.debrisFields) {
+      f.reground((x, z) => this.groundAt(x, z));
+      f.group.visible = sy < 1;
+    }
     this.first = true; // the camera cuts, as the 1973 display did
   }
 
@@ -959,6 +972,14 @@ float blastAt(vec2 p){
     if (close && !this.touch && !this.crash && LANDINGS.some((m) => S[m] !== undefined && S[m] === state.sysmes)) {
       this.touch = { verdis: state.verdis };
       this.lifting = false;
+      // A little fast, or too fast: it shows, and stays with the car
+      // left here for the games after.
+      const level = state.sysmes === S.CRIPM ? 2 : state.sysmes === S.ROUGHM ? 1 : 0;
+      if (level) {
+        const seed = state.indexl * 7919 + Math.round(state.t / 1e5);
+        this.car.damage(level, seed);
+        this.parkedDamage.set(state.indexl, { level, seed });
+      }
     }
     if (this.touch && (!close || state.verdis >= this.touch.verdis + 3)) {
       this.touch = null;
@@ -1108,7 +1129,7 @@ float blastAt(vec2 p){
         this.pose.y = this.crashAt.y;
       }
     } else if (this.topple) {
-      for (const h of this.topple.update(mdt)) this.happened({ kind: 'blow', at: h.at, speed: h.speed });
+      for (const e of this.topple.update(mdt)) this.happened(e);
       this.followCar();
       if (this.topple.resting && !this.toppleKept) this.keepWreck();
     }
@@ -1131,7 +1152,11 @@ float blastAt(vec2 p){
       this.car.place(this.pose.x, this.pose.y, this.pose.a, (x) => this.groundAt(x, 0), mdt, scale, down ? 0 : state.vervel / 10);
       if (this.car.wheels.some((w) => w.contact)) this.car.roll(this.pose.x - prevX);
       // Touchdown: the tyres kick the dust up where they meet it.
-      if (wasAir && !this.car.airborne && close && this.car.vAir < -2) this.tyreDust(-this.car.vAir);
+      if (wasAir && !this.car.airborne && close && this.car.vAir < -2) {
+        this.tyreDust(-this.car.vAir);
+        this.jolt(Math.min(1, -this.car.vAir / 16) * 0.6);
+      }
+      if (close && scale === 1) this.treads();
       if (this.opening) this.openingPose(this.opening, dt);
     }
 
@@ -1141,6 +1166,11 @@ float blastAt(vec2 p){
     if (!this.exploded) this.driver.update(state, this.mtime, mdt, down);
     this.walking = this.driver.isOut && close;
     const driverX = this.driver.x;
+
+    // A crash is kept as it happens, and shown again.
+    this.recordCrash(close);
+    if (this.replay) this.playReplay();
+    else if (this.replayFrames && !this.replayed && this.replays !== false && close && this.mtime - this.replayFrames.burstAt >= 2) this.startReplay();
 
     // Ahead of the car by its speed, while it flies; the program leaves its
     // velocity set after a crash or a tip, and the camera should not go on.
@@ -1195,6 +1225,15 @@ float blastAt(vec2 p){
       near = Math.max(0.5, Math.min(near, 0.3 * this.camRig.dist));
       kc = 1;
     }
+    if (this.replay) {
+      // The replay's own camera, low by where it hit.
+      const rc = this.replayCamera();
+      cam.copy(rc.cam);
+      look.copy(rc.look);
+      fov = rc.fov;
+      near = 0.3;
+      kc = 1;
+    }
     if (this.camera.fov !== fov) this.camera.fov = fov;
     if (this.debugCam) {
       // For tests: a fixed camera.
@@ -1205,6 +1244,19 @@ float blastAt(vec2 p){
     this.camPos.lerp(cam, kc);
     this.camera.position.copy(this.camPos);
     this.camera.lookAt(this.camTarget);
+    if (this.shake) {
+      // A dip first, the way the blow went, then a shudder dying away.
+      const sh = this.shake;
+      sh.t += dt;
+      const t = sh.t, a = sh.k * Math.exp(-t / 0.22) * (Math.PI / 180);
+      if (a < 2e-5) this.shake = null;
+      else {
+        const p = sh.p;
+        this.camera.rotateX(a * (-0.9 * Math.exp(-t / 0.06) + Math.sin(69 * t + p[0]) + 0.5 * Math.sin(113 * t + p[1])));
+        this.camera.rotateY(a * 0.6 * (Math.sin(83 * t + p[2]) + 0.5 * Math.sin(131 * t + p[3])));
+        this.camera.rotateZ(a * 0.4 * Math.sin(57 * t + p[4]));
+      }
+    }
     this.camera.near = near;
     this.camera.far = 1500000;
     this.camera.updateProjectionMatrix();
@@ -1379,12 +1431,17 @@ float blastAt(vec2 p){
     const v = new T.Vector3(state.horvel / 10, Math.min(0, state.vervel / 10), 0);
     const seed = (Math.abs(state.indexl * 0.618034) + (state.t / 1e6) * 0.37) % 1;
     this.topple = new Topple(this.car, v, (x, z) => this.solidAt(x, z), seed);
+    this.topple.marks = this.marks;
     this.toppleIndex = state.indexl;
     this.toppleKept = false;
   }
 
   /** A fresh Moon: no wrecks on it to remember. */
   forgetWrecks() {
+    this.marks.clear();
+    for (const f of this.debrisFields) f.dispose();
+    this.debrisFields = [];
+    this.parkedDamage.clear();
     this.topple = null;
     this.wreckPoses.clear();
     this.blasts.length = 0;
@@ -1417,6 +1474,7 @@ float blastAt(vec2 p){
       }
     }
     this.crash = new Crash({ scene: this.scene, car: this.car, kit: this.crashKit, v, random: this.random, solid: (x, z) => this.solidAt(x, z), ground: (x, z) => this.groundAt(x, z), aim });
+    this.crash.marks = this.marks;
     // The program digs a crater as it explodes (ALTER): read it soon.
     this.rereadAt = [this.mtime + 0.1, this.mtime + 1.2];
     this.exhaust.hide();
@@ -1424,6 +1482,132 @@ float blastAt(vec2 p){
   }
 
   /** The camera and the rest follow the car as the free body has it. */
+  /**
+   * Keep what a crash shows: the car's last second before it (always kept,
+   * in case), and the pieces for the first second and a half after.
+   */
+  recordCrash(close) {
+    const now = this.mtime;
+    if (!this.exploded) {
+      if (!close) return;
+      const tr = this.carTrail || (this.carTrail = []);
+      const car = this.car, man = this.man.root;
+      tr.push({ t: now, p: car.group.position.clone(), q: car.group.quaternion.clone(), heave: car.body.position.y, mp: man.position.clone(), mq: man.quaternion.clone(), man: man.visible });
+      while (tr.length && tr[0].t < now - 1) tr.shift();
+      return;
+    }
+    if (!this.crash || !this.crash.burst || this.replayed) return;
+    if (!this.replayFrames) {
+      const tr = this.carTrail || [];
+      const a = tr[tr.length - 2], b = tr[tr.length - 1];
+      const dir = a && b ? b.p.clone().sub(a.p).setY(0) : new T.Vector3();
+      this.replayFrames = {
+        burstAt: this.burstMt ?? now, at: this.crash.burst.at.clone(), hard: this.crash.burst.hard,
+        dir: dir.lengthSq() > 1e-6 ? dir.normalize() : new T.Vector3(1, 0, 0), car: tr.slice(), pieces: [],
+      };
+    }
+    const R = this.replayFrames;
+    if (now - R.burstAt > 1.7) return;
+    const ps = this.crash.pieces, a = new Float32Array(ps.length * 7);
+    ps.forEach((p, i) => {
+      p.o.position.toArray(a, i * 7);
+      p.o.quaternion.toArray(a, i * 7 + 3);
+    });
+    R.pieces.push({ t: now, a });
+  }
+
+  /**
+   * The crash again, slowly, from low down by where it hit: the car coming
+   * in and going to pieces, the pieces flying. Played over what is going
+   * on, which goes on underneath; the camera cuts to it and back.
+   */
+  startReplay() {
+    const R = this.replayFrames;
+    this.replayed = true;
+    if (R.car.length < 2 || R.pieces.length < 2) return;
+    const A = R.at, d = R.dir;
+    const side = new T.Vector3(0, 0, 1);
+    // Down range and to the side; out of anything solid there.
+    const cam = A.clone().addScaledVector(d, 30).addScaledVector(side, 22);
+    for (let k = 0; k < 8 && this.solidAt(cam.x, cam.z) > this.groundAt(cam.x, cam.z) + 0.5; k++) cam.addScaledVector(side, 4);
+    this.replay = { t0: this.mtime, from: R.burstAt - 0.45, to: R.burstAt + 1.6, speed: 0.45, cam, d, A, boom: false };
+  }
+
+  endReplay() {
+    if (!this.replay) return;
+    this.replay = null;
+    if (this.crash) {
+      this.crash.group.visible = true;
+      for (const e of this.crash.effects) e.mesh.visible = true;
+    }
+    this.flash.intensity = 0;
+    this.first = true; // a cut back to what is going on now
+  }
+
+  /** Where the replay has got to: pose the car, or the pieces, from what
+   * was kept, between the frames kept. */
+  playReplay() {
+    const rp = this.replay, R = this.replayFrames;
+    const tr = rp.from + (this.mtime - rp.t0) * rp.speed;
+    if (tr >= rp.to || !this.crash) return this.endReplay();
+    rp.tr = tr;
+    const before = tr < R.burstAt;
+    const between = (frames) => {
+      let i = 0;
+      while (i < frames.length - 2 && frames[i + 1].t < tr) i++;
+      const a = frames[i], b = frames[i + 1];
+      return [a, b, T.MathUtils.clamp((tr - a.t) / Math.max(1e-6, b.t - a.t), 0, 1)];
+    };
+    this.car.group.visible = before;
+    this.crash.group.visible = !before;
+    if (before) {
+      const [a, b, k] = between(R.car);
+      this.car.group.position.lerpVectors(a.p, b.p, k);
+      this.car.group.quaternion.slerpQuaternions(a.q, b.q, k);
+      this.car.body.position.y = a.heave + (b.heave - a.heave) * k;
+      this.man.root.visible = a.man;
+      this.man.root.position.lerpVectors(a.mp, b.mp, k);
+      this.man.root.quaternion.slerpQuaternions(a.mq, b.mq, k);
+    } else {
+      this.man.root.visible = false;
+      const [a, b, k] = between(R.pieces);
+      const qa = new T.Quaternion(), qb = new T.Quaternion();
+      this.crash.pieces.forEach((p, i) => {
+        if (i * 7 >= a.a.length) return;
+        p.o.position.set(a.a[i * 7], a.a[i * 7 + 1], a.a[i * 7 + 2]).lerp(new T.Vector3(b.a[i * 7], b.a[i * 7 + 1], b.a[i * 7 + 2]), k);
+        qa.fromArray(a.a, i * 7 + 3);
+        qb.fromArray(b.a, i * 7 + 3);
+        p.o.quaternion.slerpQuaternions(qa, qb, k);
+      });
+    }
+    // The dust and the sparks at their time; the flash.
+    const f = tr - R.burstAt;
+    for (const e of this.crash.effects) {
+      e.update(Math.max(0, f));
+      e.mesh.visible = f >= 0 && e.mesh.visible;
+    }
+    this.flash.position.copy(R.at).add(new T.Vector3(0, 4, 3));
+    this.flash.intensity = f >= 0 && f < 0.4 ? (R.hard ? 900 : 450) * 0.6 * Math.exp(-f * 16) : 0;
+    if (f >= 0 && !rp.boom) {
+      rp.boom = true;
+      this.events.push({ kind: 'burst', hard: R.hard, replay: true });
+    }
+  }
+
+  /** The replay's camera: low, down range of where it hit, drifting back
+   * along the way the car came as it plays. */
+  replayCamera() {
+    const rp = this.replay;
+    const s = (rp.tr ?? rp.from) - rp.from;
+    const cam = rp.cam.clone().addScaledVector(rp.d, -1.2 * s);
+    cam.y = Math.max(this.solidAt(cam.x, cam.z), this.groundAt(cam.x, cam.z)) + 3.5 + 0.5 * s;
+    // Up into the air the pieces fly through, the ground at the foot of
+    // the frame.
+    const look = rp.A.clone().addScaledVector(rp.d, -2);
+    look.y = Math.max(rp.A.y, this.groundAt(look.x, look.z)) + 8;
+    return { cam, look, fov: 44 };
+  }
+
   /**
    * The crash's pieces in the picture: the camera's look point moved to
    * their middle and its distance (as `d2`, the multiple of the camera's
@@ -1471,6 +1655,7 @@ float blastAt(vec2 p){
   happened(e) {
     this.events.push(e);
     if (e.kind === 'burst') {
+      this.burstMt = this.mtime;
       this.exploded = true;
       this.crashAt = e.at.clone();
       this.flashAt = this.mtime;
@@ -1482,6 +1667,40 @@ float blastAt(vec2 p){
       this.halo = { b, s: e.hard ? 0.9 : 0.6, at: this.mtime, over: e.hard ? 4 : 1.6 };
     }
     if (e.kind === 'blow' && e.speed > 3) this.dust.kick(e.at, e.speed * 0.6, (x, z) => this.groundAt(x, z), 1);
+    if (e.down && this.topple) this.car.damage(1, (this.toppleIndex || 0) + 1);
+    if (e.kind === 'debris') this.dust.kick(e.at, e.speed * 0.45, (x, z) => this.groundAt(x, z), 0.6);
+    // The camera takes the car's blows, not the pieces'.
+    if (e.kind === 'burst') this.jolt(e.hard ? 1.8 : 1.2);
+    else if (e.kind === 'blow' && e.speed > 3) this.jolt(Math.min(1, e.speed / 14) * 0.5);
+  }
+
+  /**
+   * The camera jolted, as if it stood on the ground the blow came through:
+   * `k` about a degree at 1, dying away in a few tenths of a second. Not
+   * for those who have asked for less motion.
+   */
+  jolt(k) {
+    if (k < 0.05 || (typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches)) return;
+    const now = this.shake ? this.shake.k * Math.exp(-this.shake.t / 0.22) : 0;
+    if (k <= now) return;
+    const R = Math.random;
+    this.shake = { k, t: 0, p: [R() * 6.3, R() * 6.3, R() * 6.3, R() * 6.3, R() * 6.3] };
+  }
+
+  /** The tyres on the ground leave their tread in it; each coming down
+   * from a hop or a flight, its print where it came down. */
+  treads() {
+    const car = this.car;
+    car.group.updateMatrixWorld(true);
+    const along = new T.Vector3(1, 0, 0).applyQuaternion(car.group.quaternion);
+    for (const w of car.wheels) {
+      const was = w.wasDown;
+      w.wasDown = w.contact;
+      if (!w.contact || !w.group.visible) continue;
+      const p = new T.Vector3().setFromMatrixPosition(w.group.matrixWorld);
+      p.y -= w.r;
+      this.marks.follow(w, p, this.mtime, 'tread', CAR.TYRE_W * 1.4, !was && car.vAir < -1.5 ? along : null);
+    }
   }
 
   /** The tyres meeting the ground at `speed` ft/s throw a little dust. */
@@ -1530,6 +1749,10 @@ float blastAt(vec2 p){
     if (hi >= 0) {
       this.land.refresh();
       if (hi - lo < 40) this.patchLand(lo, hi);
+      // What lay on the ground there lies on the new ground.
+      this.prints.reground((x, z) => this.groundAt(x, z));
+      this.marks.reground();
+      for (const f of this.debrisFields) f.reground((x, z) => this.groundAt(x, z));
       this.askLand();
       this.fillTerrain();
       this.placeFeatures();
@@ -1586,9 +1809,19 @@ float blastAt(vec2 p){
     this.tracker = null;
     this.driver.reset();
     this.car.setCanopy(0);
+    this.car.mend();
     this.topple = null;
+    if (this.replay) this.endReplay();
+    this.replayFrames = null;
+    this.replayed = false;
+    this.carTrail = [];
     if (this.crash) {
-      this.crash.dispose();
+      // What is left of it stays on the Moon: the last few crashes' pieces.
+      if (this.crash.burst) {
+        this.crash.keep((x, z) => this.groundAt(x, z));
+        this.debrisFields.push(this.crash);
+        if (this.debrisFields.length > 3) this.debrisFields.shift().dispose();
+      } else this.crash.dispose();
       this.crash = null;
     }
     this.flashAt = undefined;

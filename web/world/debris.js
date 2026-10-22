@@ -254,7 +254,24 @@ export class Crash {
         // The first blow, or long enough: it goes.
         if (this.body.contacts.length || this.time > 3) this.breakUp();
       } else {
-        for (const p of this.pieces) p.body.step(this.solid);
+        for (const p of this.pieces) {
+          p.body.step(this.solid);
+          if (this.marks) this.marks.traceBody(p.body, { scrape: p.big ? 0.9 : 0.3, wheel: p.body.wheels.length > 0 });
+        }
+      }
+    }
+    // The big pieces coming down: felt through the ground, and the dust
+    // they throw. One blow a piece at a time, not every step of it.
+    if (this.burst) {
+      for (const p of this.pieces) {
+        const hits = p.body.hits;
+        if (!hits.length) continue;
+        p.body.hits = [];
+        if (!p.big || this.time - (p.hitAt || -1) < 0.3) continue;
+        const h = hits.reduce((a, c) => (c.speed > a.speed ? c : a));
+        if (h.speed < 4) continue;
+        p.hitAt = this.time;
+        this.events.push({ kind: 'debris', at: h.at, speed: h.speed });
       }
     }
     const k = this.acc / STEP;
@@ -547,12 +564,52 @@ export class Crash {
     this.jobs = this.jobs.filter((j) => j.i < j.count);
   }
 
+  /**
+   * For the games after: the pieces where they came to rest. Whatever is
+   * still moving is run on toward rest first, here and now, for as long
+   * as a frame can spare; then what is on the ground stays as it is, and
+   * what is still in the air is not kept. The dust and the gas are long
+   * gone.
+   */
+  keep(ground) {
+    this.kit.clear();
+    this.effects = [];
+    this.jobs = [];
+    const t0 = performance.now();
+    for (let i = 0; i < 4 / STEP && performance.now() - t0 < 20; i++) {
+      let moving = false;
+      for (const p of this.pieces) {
+        if (p.body.asleep) continue;
+        p.body.step(this.solid);
+        if (this.marks) this.marks.traceBody(p.body, { scrape: p.big ? 0.9 : 0.3, wheel: p.body.wheels.length > 0 });
+        moving = true;
+      }
+      if (!moving) break;
+    }
+    this.pieces = this.pieces.filter((p) => {
+      if (p.body.asleep || p.body.contacts.length) return true;
+      p.o.parent.remove(p.o);
+      p.o.traverse((o) => o.geometry && !o.userData.shared && o.geometry.dispose());
+      return false;
+    });
+    for (const p of this.pieces) {
+      p.pose();
+      p.lift = p.o.position.y - ground(p.o.position.x, p.o.position.z);
+    }
+    this.kept = true;
+  }
+
+  /** Kept pieces back on the ground after it has changed height. */
+  reground(ground) {
+    for (const p of this.pieces) p.o.position.y = ground(p.o.position.x, p.o.position.z) + p.lift;
+  }
+
   dispose() {
     this.scene.remove(this.group);
     this.group.traverse((o) => {
       if (o.geometry && !o.userData.shared) o.geometry.dispose();
     });
-    // The kit stays for the next one, emptied.
-    this.kit.clear();
+    // The kit stays for the next one, emptied (a kept one emptied it then).
+    if (!this.kept) this.kit.clear();
   }
 }
